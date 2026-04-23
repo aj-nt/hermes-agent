@@ -4539,6 +4539,54 @@ class AIAgent:
                 if user_block:
                     prompt_parts.append(user_block)
 
+        # Vault auto-injection (Layer 3) — reads working-context.md and
+        # user-profile.md from the Obsidian vault and injects them into
+        # the system prompt. Structural fix for vault neglect.
+        _vault_log = logging.getLogger("agent.vault")
+        if self._vault_enabled and self._vault_path:
+            try:
+                from agent.vault_injection import build_vault_system_prompt
+                _vault_block = build_vault_system_prompt(self._vault_path)
+                if _vault_block:
+                    prompt_parts.append(_vault_block)
+                    _vault_log.info("Injection succeeded: %d chars from %s", len(_vault_block), self._vault_path)
+                else:
+                    _vault_log.warning("Injection returned empty for path %s", self._vault_path)
+            except Exception as e:
+                _vault_log.warning("Injection failed: %s: %s", type(e).__name__, e)
+        else:
+            _vault_log.info("Injection skipped: enabled=%s path=%s", self._vault_enabled, self._vault_path)
+
+        # Checkpoint injection (Layer 4) -- resume from where the previous session left off
+        if self._checkpoint_store:
+            try:
+                _checkpoint_session_id = None
+                if self._session_db:
+                    _sid = self.session_id
+                    # Walk up the parent chain to find the nearest ancestor with a checkpoint
+                    for _ in range(5):  # max 5 hops up lineage
+                        try:
+                            _sess = self._session_db.get_session(_sid)
+                        except Exception:
+                            break
+                        if not _sess:
+                            break
+                        _parent = _sess.get("parent_session_id")
+                        if not _parent:
+                            break
+                        if self._checkpoint_store.read(_parent) is not None:
+                            _checkpoint_session_id = _parent
+                            break
+                        _sid = _parent  # keep walking up
+                from agent.checkpoint_injection import build_checkpoint_system_prompt
+                _cp_block = build_checkpoint_system_prompt(
+                    store=self._checkpoint_store,
+                    parent_session_id=_checkpoint_session_id,
+                )
+                if _cp_block:
+                    prompt_parts.append(_cp_block)
+            except Exception as e:
+                logger.debug("Checkpoint injection skipped: %s", e)
         # External memory provider system prompt block (additive to built-in)
         if self._memory_manager:
             try:
