@@ -8242,6 +8242,52 @@ class AIAgent:
             if messages and messages[-1].get("_flush_sentinel") == _sentinel:
                 messages.pop()
 
+    def flush_checkpoint(self, messages: list = None) -> None:
+        """Write a checkpoint before context compression destroys progress.
+
+        Called by _compress_context before the compression happens.
+        Captures whatever task state we can extract from the agent's
+        current context (todo list, session ID, git state) and writes
+        a checkpoint. If a checkpoint already exists for this session,
+        it gets overwritten -- the pre-compression checkpoint is always
+        the most accurate.
+        """
+        if not self._checkpoint_store:
+            return
+
+        from tools.checkpoint_tool import checkpoint_tool
+        # Extract task description from session title or fallback
+        task_desc = "Session checkpoint (auto-saved before compression)"
+        try:
+            if self._session_db:
+                title = self._session_db.get_session_title(self.session_id)
+                if title:
+                    task_desc = title
+        except Exception:
+            pass
+
+        # Extract progress from todo store if available
+        progress = []
+        if self._todo_store:
+            try:
+                items = self._todo_store._items if hasattr(self._todo_store, '_items') else []
+                for item in items:
+                    step = {"step": item.get("content", ""), "status": item.get("status", "pending")}
+                    progress.append(step)
+            except Exception:
+                pass
+
+        checkpoint_tool(
+            action="write",
+            task=task_desc,
+            progress=progress,
+            state={},
+            decisions=[],
+            store=self._checkpoint_store,
+            agent=self,
+        )
+        logger.info("Pre-compression checkpoint saved for session %s", self.session_id)
+
     def _compress_context(self, messages: list, system_message: str, *, approx_tokens: int = None, task_id: str = "default", focus_topic: str = None) -> tuple:
         """Compress conversation context and split the session in SQLite.
 
@@ -8262,6 +8308,9 @@ class AIAgent:
         )
         # Pre-compression memory flush: let the model save memories before they're lost
         self.flush_memories(messages, min_turns=0)
+
+        # Pre-compression checkpoint: save task state before context is lost
+        self.flush_checkpoint(messages)
 
         # Notify external memory provider before compression discards context
         if self._memory_manager:
