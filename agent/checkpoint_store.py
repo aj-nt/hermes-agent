@@ -6,12 +6,16 @@ left off after context compaction or session restart. Files live under
 """
 
 import logging
+import re
 import yaml
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Session IDs must be safe filesystem names -- no path separators or traversal
+_SAFE_SESSION_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 
 DEFAULT_CHECKPOINTS_DIR = Path.home() / ".hermes" / "checkpoints"
 DEFAULT_GC_MAX_AGE_DAYS = 7
@@ -25,6 +29,8 @@ class CheckpointStore:
         self._dir.mkdir(parents=True, exist_ok=True)
 
     def _path_for(self, session_id: str) -> Path:
+        if not _SAFE_SESSION_ID.match(session_id):
+            raise ValueError(f"Invalid session_id: {session_id!r} (must match {_SAFE_SESSION_ID.pattern})")
         return self._dir / f"{session_id}.yaml"
 
     def write(self, session_id: str, data: Dict[str, Any]) -> None:

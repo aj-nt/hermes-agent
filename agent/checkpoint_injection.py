@@ -21,20 +21,13 @@ def build_checkpoint_system_prompt(store, parent_session_id: str = None) -> str:
     """Build the checkpoint injection block for the system prompt.
 
     Returns empty string if no applicable checkpoint exists.
+    The caller is responsible for walking the parent lineage chain to find
+    the nearest ancestor session that has a checkpoint file.
     """
     if not store or not parent_session_id:
         return ""
 
     data = store.read(parent_session_id)
-
-    # Walk lineage if direct parent has no checkpoint
-    if data is None and store._dir.exists():
-        all_sessions = store.list_sessions()
-        for sid in reversed(all_sessions):
-            attempt = store.read(sid)
-            if attempt and attempt.get("status") == "in_progress":
-                data = attempt
-                break
 
     if not data or not isinstance(data, dict):
         return ""
