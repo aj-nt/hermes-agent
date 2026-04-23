@@ -1793,6 +1793,53 @@ def _reset_aux_to_auto() -> int:
     return count
 
 
+def _set_builtin_provider_config(
+    cfg: dict,
+    provider: str,
+    base_url: str = "",
+    api_mode: str = "",
+) -> dict:
+    """Set the main model's provider routing fields and clear stale credentials.
+
+    Normalizes ``cfg["model"]`` to a dict (converting bare-string models),
+    sets ``provider`` / ``base_url`` / ``api_mode``, and **always** pops
+    ``api_key``.  Built-in providers resolve their keys from env vars or
+    the credential pool at runtime — a leftover ``api_key`` from a prior
+    provider causes credential drift and 401 errors.
+
+    Does NOT call ``save_config()`` — the caller is responsible for saving
+    after setting any additional fields (e.g. bedrock region, reasoning
+    effort).
+
+    Returns the normalized model dict so callers can inspect or modify it
+    further before saving.
+
+    Mirrors auth.py ``set_provider_in_config`` (line ~2764).  (#14134)
+    """
+    model = cfg.get("model")
+    if not isinstance(model, dict):
+        model = {"default": model} if model else {}
+        cfg["model"] = model
+
+    model["provider"] = provider
+
+    if base_url:
+        model["base_url"] = base_url
+    else:
+        model.pop("base_url", None)
+
+    if api_mode:
+        model["api_mode"] = api_mode
+    else:
+        model.pop("api_mode", None)
+
+    # Always clear stale api_key.  Built-in providers never store their
+    # key in config.yaml — they use env vars / credential pool.
+    model.pop("api_key", None)
+
+    return model
+
+
 def _aux_config_menu() -> None:
     """Top-level auxiliary-model picker — choose a task to configure.
 
@@ -2089,17 +2136,10 @@ def _model_flow_openrouter(config, current_model=""):
     if selected:
         _save_model_choice(selected)
 
-        # Update config provider and deactivate any OAuth provider
         from hermes_cli.config import load_config, save_config
 
         cfg = load_config()
-        model = cfg.get("model")
-        if not isinstance(model, dict):
-            model = {"default": model} if model else {}
-            cfg["model"] = model
-        model["provider"] = "openrouter"
-        model["base_url"] = OPENROUTER_BASE_URL
-        model["api_mode"] = "chat_completions"
+        _set_builtin_provider_config(cfg, "openrouter", OPENROUTER_BASE_URL, "chat_completions")
         save_config(cfg)
         deactivate_provider()
         print(f"Default model set to: {selected} (via OpenRouter)")
@@ -2150,13 +2190,7 @@ def _model_flow_ai_gateway(config, current_model=""):
         from hermes_cli.config import load_config, save_config
 
         cfg = load_config()
-        model = cfg.get("model")
-        if not isinstance(model, dict):
-            model = {"default": model} if model else {}
-            cfg["model"] = model
-        model["provider"] = "ai-gateway"
-        model["base_url"] = AI_GATEWAY_BASE_URL
-        model["api_mode"] = "chat_completions"
+        _set_builtin_provider_config(cfg, "ai-gateway", AI_GATEWAY_BASE_URL, "chat_completions")
         save_config(cfg)
         deactivate_provider()
         print(f"Default model set to: {selected} (via Vercel AI Gateway)")
@@ -2319,6 +2353,7 @@ def _model_flow_nous(config, current_model="", args=None):
             model_cfg = {}
         model_cfg["provider"] = "nous"
         model_cfg["default"] = selected
+        model_cfg.pop("api_key", None)  # built-in provider — key comes from credential pool
         if inference_url and inference_url.strip():
             model_cfg["base_url"] = inference_url.rstrip("/")
         else:
@@ -3311,16 +3346,11 @@ def _model_flow_copilot(config, current_model=""):
         _save_model_choice(selected)
 
         cfg = load_config()
-        model = cfg.get("model")
-        if not isinstance(model, dict):
-            model = {"default": model} if model else {}
-            cfg["model"] = model
-        model["provider"] = provider_id
-        model["base_url"] = effective_base
-        model["api_mode"] = copilot_model_api_mode(
-            selected,
-            catalog=catalog,
-            api_key=api_key,
+        _set_builtin_provider_config(
+            cfg,
+            provider_id,
+            effective_base,
+            copilot_model_api_mode(selected, catalog=catalog, api_key=api_key),
         )
         if selected_effort is not None:
             _set_reasoning_effort(cfg, selected_effort)
@@ -3437,13 +3467,7 @@ def _model_flow_copilot_acp(config, current_model=""):
     _save_model_choice(selected)
 
     cfg = load_config()
-    model = cfg.get("model")
-    if not isinstance(model, dict):
-        model = {"default": model} if model else {}
-        cfg["model"] = model
-    model["provider"] = provider_id
-    model["base_url"] = effective_base
-    model["api_mode"] = "chat_completions"
+    _set_builtin_provider_config(cfg, provider_id, effective_base, "chat_completions")
     save_config(cfg)
     deactivate_provider()
 
@@ -3545,13 +3569,7 @@ def _model_flow_kimi(config, current_model=""):
 
         # Update config with provider and base URL
         cfg = load_config()
-        model = cfg.get("model")
-        if not isinstance(model, dict):
-            model = {"default": model} if model else {}
-            cfg["model"] = model
-        model["provider"] = provider_id
-        model["base_url"] = effective_base
-        model.pop("api_mode", None)  # let runtime auto-detect from URL
+        _set_builtin_provider_config(cfg, provider_id, effective_base)  # no api_mode — runtime auto-detects from URL
         save_config(cfg)
         deactivate_provider()
 
@@ -3679,17 +3697,11 @@ def _model_flow_stepfun(config, current_model=""):
         _save_model_choice(selected)
 
         cfg = load_config()
-        model = cfg.get("model")
-        if not isinstance(model, dict):
-            model = {"default": model} if model else {}
-            cfg["model"] = model
-        model["provider"] = provider_id
-        model["base_url"] = effective_base
-        model.pop("api_mode", None)
+        _set_builtin_provider_config(cfg, provider_id, effective_base)  # no api_mode — runtime auto-detects
         save_config(cfg)
         deactivate_provider()
 
-        config["model"] = dict(model)
+        config["model"] = cfg["model"]
         print(f"Default model set to: {selected} (via {pconfig.name})")
     else:
         print("No change.")
@@ -3755,13 +3767,7 @@ def _model_flow_bedrock_api_key(config, region, current_model=""):
 
         # Save as custom provider pointing to bedrock-mantle
         cfg = load_config()
-        model = cfg.get("model")
-        if not isinstance(model, dict):
-            model = {"default": model} if model else {}
-            cfg["model"] = model
-        model["provider"] = "custom"
-        model["base_url"] = mantle_base_url
-        model.pop("api_mode", None)  # chat_completions is the default
+        _set_builtin_provider_config(cfg, "custom", mantle_base_url)  # no api_mode — chat_completions is default
 
         # Also save region in bedrock config for reference
         bedrock_cfg = cfg.get("bedrock", {})
@@ -3944,13 +3950,11 @@ def _model_flow_bedrock(config, current_model=""):
         _save_model_choice(selected)
 
         cfg = load_config()
-        model = cfg.get("model")
-        if not isinstance(model, dict):
-            model = {"default": model} if model else {}
-            cfg["model"] = model
-        model["provider"] = "bedrock"
-        model["base_url"] = f"https://bedrock-runtime.{region}.amazonaws.com"
-        model.pop("api_mode", None)  # bedrock_converse is auto-detected
+        _set_builtin_provider_config(
+            cfg,
+            "bedrock",
+            f"https://bedrock-runtime.{region}.amazonaws.com",
+        )  # no api_mode — bedrock_converse is auto-detected
 
         bedrock_cfg = cfg.get("bedrock", {})
         if not isinstance(bedrock_cfg, dict):
@@ -4182,21 +4186,12 @@ def _model_flow_api_key_provider(config, provider_id, current_model=""):
 
         # Update config with provider, base URL, and provider-specific API mode
         cfg = load_config()
-        model = cfg.get("model")
-        if not isinstance(model, dict):
-            model = {"default": model} if model else {}
-            cfg["model"] = model
-        model["provider"] = provider_id
-        model["base_url"] = effective_base
-        if provider_id in {"opencode-zen", "opencode-go"}:
-            model["api_mode"] = opencode_model_api_mode(provider_id, selected)
-        else:
-            model.pop("api_mode", None)
-        # Clear stale api_key from a previous provider.  Built-in providers
-        # get their keys from env vars / credential pool — a leftover key
-        # from a prior provider causes credential drift (401 errors).
-        # Mirrors auth.py set_provider_in_config (line ~2764).  (#14134)
-        model.pop("api_key", None)
+        effective_api_mode = (
+            opencode_model_api_mode(provider_id, selected)
+            if provider_id in {"opencode-zen", "opencode-go"}
+            else ""
+        )
+        _set_builtin_provider_config(cfg, provider_id, effective_base, effective_api_mode)
         save_config(cfg)
         deactivate_provider()
 
@@ -4423,12 +4418,7 @@ def _model_flow_anthropic(config, current_model=""):
         # Leaving a stale base_url in config can contaminate other
         # providers if the user switches without running 'hermes model'.
         cfg = load_config()
-        model = cfg.get("model")
-        if not isinstance(model, dict):
-            model = {"default": model} if model else {}
-            cfg["model"] = model
-        model["provider"] = "anthropic"
-        model.pop("base_url", None)
+        _set_builtin_provider_config(cfg, "anthropic")
         save_config(cfg)
         deactivate_provider()
 
