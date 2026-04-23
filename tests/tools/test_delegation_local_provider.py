@@ -107,6 +107,18 @@ class TestLocalProviderCredentials(unittest.TestCase):
         creds = _resolve_delegation_credentials(cfg, parent)
         self.assertEqual(creds["api_key"], "my-secret-key")
 
+    def test_localhost_base_url_whitespace_api_key_gets_placeholder(self):
+        """Whitespace-only api_key should be treated as absent and get placeholder."""
+        parent = _make_mock_parent()
+        cfg = {
+            "model": "devstral-small-2:24b-cloud",
+            "provider": "custom",
+            "base_url": "http://localhost:11434/v1",
+            "api_key": "   ",
+        }
+        creds = _resolve_delegation_credentials(cfg, parent)
+        self.assertEqual(creds["api_key"], "ollama")
+
     # --- base_url path (remote) should still require API key ---
 
     def test_remote_base_url_still_requires_api_key(self):
@@ -223,6 +235,16 @@ class TestIsLocalBaseUrlHelper(unittest.TestCase):
     def test_none(self):
         from tools.delegate_tool import _is_local_base_url
         self.assertFalse(_is_local_base_url(None))
+
+    def test_ipv6_loopback(self):
+        """IPv6 loopback [::1] should be recognized as local."""
+        from tools.delegate_tool import _is_local_base_url
+        self.assertTrue(_is_local_base_url("http://[::1]:11434/v1"))
+
+    def test_172_outside_private_range(self):
+        """172.32.x.x is NOT in 172.16/12 and should not be treated as local."""
+        from tools.delegate_tool import _is_local_base_url
+        self.assertFalse(_is_local_base_url("http://172.32.0.1:11434/v1"))
 
 
 if __name__ == "__main__":
