@@ -2113,6 +2113,15 @@ def _is_local_base_url(base_url: Optional[str]) -> bool:
       - localhost / loopback (127.0.0.1, ::1)
       - .local mDNS hostnames (e.g. studio.local)
       - RFC 1918 private networks (10/8, 172.16/12, 192.168/16)
+
+    .. note::
+        Any URL that resolves as "local" by this function will receive a
+        placeholder ``"ollama"`` API key.  If an internal service on a
+        private network actually requires authentication (e.g. a corporate
+        AI gateway at 192.168.x.x), the placeholder key will be rejected
+        by that server (401/403).  This is intentional — local servers that
+        genuinely don't need auth work out-of-the-box, while misconfigured
+        endpoints fail loudly rather than silently.
     """
     if not base_url:
         return False
