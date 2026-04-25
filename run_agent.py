@@ -851,6 +851,86 @@ class AIAgent:
         # same image history.
         self._anthropic_image_fallback_cache: Dict[str, str] = {}
 
+        # ── Kore config objects ──────────────────────────────────────
+        # Assemble structured configuration from __init__ params.  These
+        # dataclasses group the 61 positional args into coherent objects
+        # that Kore modules will consume.  The __init__ signature stays
+        # identical for backward compat; the dataclasses are the internal
+        # structuring that enables provider extraction.
+        from agent.kore.config import (
+            ProviderConfig as _ProviderConfig,
+            StreamConfig as _StreamConfig,
+            SessionConfig as _SessionConfig,
+            AgentConfig as _AgentConfig,
+        )
+        self._provider_config = _ProviderConfig(
+            base_url=self.base_url,
+            api_key=api_key,
+            provider=self.provider,
+            api_mode=self.api_mode,
+            model=self.model,
+            max_tokens=max_tokens,
+            reasoning_config=reasoning_config,
+            service_tier=service_tier,
+            request_overrides=self.request_overrides,
+            providers_allowed=providers_allowed,
+            providers_ignored=providers_ignored,
+            providers_order=providers_order,
+            provider_sort=provider_sort,
+            provider_require_parameters=provider_require_parameters,
+            provider_data_collection=provider_data_collection,
+            fallback_model=fallback_model,
+            credential_pool=credential_pool,
+        )
+        self._stream_config = _StreamConfig(
+            tool_progress_callback=tool_progress_callback,
+            tool_start_callback=tool_start_callback,
+            tool_complete_callback=tool_complete_callback,
+            thinking_callback=thinking_callback,
+            reasoning_callback=reasoning_callback,
+            clarify_callback=clarify_callback,
+            step_callback=step_callback,
+            stream_delta_callback=stream_delta_callback,
+            interim_assistant_callback=interim_assistant_callback,
+            tool_gen_callback=tool_gen_callback,
+            status_callback=status_callback,
+        )
+        self._session_config = _SessionConfig(
+            session_id=session_id,
+            platform=platform,
+            user_id=user_id,
+            user_name=user_name,
+            chat_id=chat_id,
+            chat_name=chat_name,
+            chat_type=chat_type,
+            thread_id=thread_id,
+            gateway_session_key=gateway_session_key,
+            session_db=session_db,
+            parent_session_id=parent_session_id,
+            pass_session_id=pass_session_id,
+            persist_session=persist_session,
+            skip_context_files=skip_context_files,
+            skip_memory=skip_memory,
+            checkpoints_enabled=checkpoints_enabled,
+            checkpoint_max_snapshots=checkpoint_max_snapshots,
+        )
+        self._agent_config = _AgentConfig(
+            max_iterations=max_iterations,
+            iteration_budget=self.iteration_budget,
+            tool_delay=tool_delay,
+            enabled_toolsets=enabled_toolsets,
+            disabled_toolsets=disabled_toolsets,
+            quiet_mode=quiet_mode,
+            verbose_logging=verbose_logging,
+            save_trajectories=save_trajectories,
+            ephemeral_system_prompt=ephemeral_system_prompt,
+            log_prefix_chars=log_prefix_chars,
+            log_prefix=log_prefix,
+            prefill_messages=prefill_messages,
+            acp_command=acp_command,
+            acp_args=acp_args,
+        )
+
         # Initialize LLM client via centralized provider router.
         # The router handles auth resolution, base URL, headers, and
         # Codex/Anthropic wrapping for all known providers.
