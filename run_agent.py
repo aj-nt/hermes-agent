@@ -2401,14 +2401,13 @@ class AIAgent:
 
 
     def _is_ollama_glm_backend(self) -> bool:
-        """Detect the narrow backend family affected by Ollama/GLM stop misreports."""
-        model_lower = (self.model or "").lower()
-        provider_lower = (self.provider or "").lower()
-        if "glm" not in model_lower and provider_lower != "zai":
-            return False
-        if "ollama" in self._base_url_lower or ":11434" in self._base_url_lower:
-            return True
-        return bool(self.base_url and is_local_endpoint(self.base_url))
+        from agent.kore.glm_heuristic import is_ollama_glm_backend
+        from agent.kore.config import ProviderConfig
+        return is_ollama_glm_backend(ProviderConfig(
+            model=getattr(self, "model", None),
+            provider=getattr(self, "provider", None),
+            base_url=getattr(self, "base_url", None),
+        ))
 
     def _should_treat_stop_as_truncated(
         self,
@@ -2416,30 +2415,20 @@ class AIAgent:
         assistant_message,
         messages: Optional[list] = None,
     ) -> bool:
-        """Detect conservative stop->length misreports for Ollama-hosted GLM models."""
-        if finish_reason != "stop" or self.api_mode != "chat_completions":
-            return False
-        if not self._is_ollama_glm_backend():
-            return False
-        if not any(
-            isinstance(msg, dict) and msg.get("role") == "tool"
-            for msg in (messages or [])
-        ):
-            return False
-        if assistant_message is None or getattr(assistant_message, "tool_calls", None):
-            return False
+        from agent.kore.glm_heuristic import should_treat_stop_as_truncated
+        from agent.kore.config import ProviderConfig
+        return should_treat_stop_as_truncated(
+            ProviderConfig(
+                model=getattr(self, "model", None),
+                provider=getattr(self, "provider", None),
+                base_url=getattr(self, "base_url", None),
+                api_mode=getattr(self, "api_mode", None),
+            ),
+            finish_reason,
+            assistant_message,
+            messages,
+        )
 
-        content = getattr(assistant_message, "content", None)
-        if not isinstance(content, str):
-            return False
-
-        visible_text = self._strip_think_blocks(content).strip()
-        if not visible_text:
-            return False
-        if len(visible_text) < 20 or not re.search(r"\s", visible_text):
-            return False
-
-        return not self._has_natural_response_ending(visible_text)
 
     def _looks_like_codex_intermediate_ack(
         self,
