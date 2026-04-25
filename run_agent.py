@@ -399,20 +399,14 @@ def _paths_overlap(left: Path, right: Path) -> bool:
 
 
 # =========================================================================
-# Qwen Portal headers — mimics QwenCode CLI for portal.qwen.ai compatibility.
-# Extracted as a module-level helper so both __init__ and
-# _apply_client_headers_for_base_url can share it.
+# Provider headers — extracted to agent.kore.provider_headers for the
+# Kore refactor. Re-exported here for backward compatibility.
 # =========================================================================
-_QWEN_CODE_VERSION = "0.14.1"
-
-
-def _routermint_headers() -> dict:
-    """Return the User-Agent RouterMint needs to avoid Cloudflare 1010 blocks."""
-    from hermes_cli import __version__ as _HERMES_VERSION
-
-    return {
-        "User-Agent": f"HermesAgent/{_HERMES_VERSION}",
-    }
+from agent.kore.provider_headers import (
+    _QWEN_CODE_VERSION,
+    routermint_headers as _routermint_headers,
+    qwen_portal_headers as _qwen_portal_headers,
+)
 
 
 def _pool_may_recover_from_rate_limit(pool) -> bool:
@@ -438,19 +432,6 @@ def _pool_may_recover_from_rate_limit(pool) -> bool:
     if not pool.has_available():
         return False
     return len(pool.entries()) > 1
-
-
-def _qwen_portal_headers() -> dict:
-    """Return default HTTP headers required by Qwen Portal API."""
-    import platform as _plat
-
-    _ua = f"QwenCode/{_QWEN_CODE_VERSION} ({_plat.system().lower()}; {_plat.machine()})"
-    return {
-        "User-Agent": _ua,
-        "X-DashScope-CacheControl": "enable",
-        "X-DashScope-UserAgent": _ua,
-        "X-DashScope-AuthType": "qwen-oauth",
-    }
 
 
 class AIAgent:
