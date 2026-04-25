@@ -296,7 +296,8 @@ class MemoryStore:
         
         Uses INSERT OR IGNORE so partially-migrated tables are handled correctly —
         existing rows (by unique key) are skipped, not duplicated.
-        Safe to call multiple times (idempotent).
+        Only runs once: after successful migration, a flag is written to state_meta
+        so deleted entries don't reappear on future sessions.
         """
         if self._migrated:
             return
@@ -308,7 +309,19 @@ class MemoryStore:
             self._migrated = True
             return
         
+        # Check if migration already ran (persisted in state_meta)
+        try:
+            row = self._query_one(
+                "SELECT value FROM state_meta WHERE key = 'memories_migrated'"
+            )
+            if row and row[0] == "1":
+                self._migrated = True
+                return
+        except Exception:
+            pass  # state_meta might not exist yet — proceed with migration
+        
         mem_dir = get_memory_dir()
+        migrated_count = 0
         
         for target, filename in [("memory", "MEMORY.md"), ("user", "USER.md")]:
             filepath = mem_dir / filename
@@ -326,11 +339,20 @@ class MemoryStore:
                         "VALUES (?, ?, ?, ?, ?)",
                         (target, category, key, entry, priority)
                     )
+                    migrated_count += 1
                 except Exception as e:
                     logger.warning(f"Migration: failed to insert entry '{entry[:50]}...': {e}")
         
+        # Mark migration as complete in state_meta so it never re-runs
+        try:
+            self._execute(
+                "INSERT OR REPLACE INTO state_meta (key, value) VALUES ('memories_migrated', '1')"
+            )
+        except Exception:
+            pass  # state_meta table might not exist — not critical
+        
         self._migrated = True
-        logger.info("Migrated flat-file memory entries to SQLite")
+        logger.info(f"Migrated {migrated_count} flat-file memory entries to SQLite")
     
     @staticmethod
     def _read_file(path: Path) -> List[str]:

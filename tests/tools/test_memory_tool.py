@@ -45,6 +45,11 @@ def db_path(tmp_path):
         CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
         INSERT INTO schema_version VALUES (10);
         
+        CREATE TABLE IF NOT EXISTS state_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        );
+        
         CREATE TABLE memories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             target TEXT NOT NULL CHECK(target IN ('memory', 'user')),
@@ -479,6 +484,41 @@ class TestMigrationFromFiles:
         # The existing key should appear exactly once — no duplicate from flat file
         existing_rows = store._query(f"SELECT * FROM memories WHERE key='{existing_key}'")
         assert len(existing_rows) == 1
+
+    def test_migrate_runs_once_per_state_meta_flag(self, store, tmp_path):
+        """After migration, a flag is set in state_meta so deleted entries 
+        don't reappear on future sessions (new /reload).
+        """
+        mem_dir = tmp_path / "memories"
+        mem_dir.mkdir()
+        (mem_dir / "MEMORY.md").write_text("Entry that might get deleted later\n")
+        
+        store._migrated = False
+        
+        import tools.memory_tool as mt
+        original_get = mt.get_memory_dir
+        mt.get_memory_dir = lambda: mem_dir
+        try:
+            store._migrate_from_files()
+        finally:
+            mt.get_memory_dir = original_get
+        
+        # Migration should have set the state_meta flag
+        flag = store._query_one("SELECT value FROM state_meta WHERE key = 'memories_migrated'")
+        assert flag is not None and flag[0] == "1"
+        
+        # Now delete the entry from SQLite (simulating a user removing a memory)
+        store.remove("memory", old_text="Entry that might get deleted")
+        rows_before = store._query("SELECT * FROM memories")
+        assert len(rows_before) == 0
+        
+        # Reset the in-memory flag to simulate a new session
+        store._migrated = False
+        
+        # Re-run migration — it should skip because state_meta flag is set
+        store._migrate_from_files()
+        rows_after = store._query("SELECT * FROM memories")
+        assert len(rows_after) == 0  # Entry stays deleted, not re-migrated
 
 
 # ---------------------------------------------------------------------------
