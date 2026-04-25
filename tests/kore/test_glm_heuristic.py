@@ -95,8 +95,20 @@ class TestShouldTreatStopAsTruncated:
 
     def test_with_tool_messages_truncated_response(self):
         config = _make_config()
-        # Must be >500 chars to pass the minimum-length gate
-        content = "Based on the search results, I found several relevant findings that connect to your query about the configuration parameters and their adjustments, specifically the timeout value should be increased from 30 to 120 seconds, and the retry count should be set to 5 rather than 3. Additionally, the endpoint URL needs to be updated to reflect the new server location which is now at https://api dot v2 dot example dot com instead of the previous one but the response was cut"
+        # Must be >500 chars to pass the minimum-length gate.
+        # No period/emoji at end, so has_natural_response_ending returns False.
+        content = (
+            "Based on the search results, I found several relevant findings that "
+            "connect to your query about the configuration parameters and their "
+            "adjustments, specifically the timeout value should be increased from "
+            "30 to 120 seconds, and the retry count should be set to 5 rather "
+            "than 3, additionally the endpoint URL needs to be updated to reflect "
+            "the new server location, which is now at the updated address instead "
+            "of the previous one, and the migration guide suggests running the "
+            "update script with the force flag to ensure all changes are applied "
+            "correctly, and then verifying by checking the configuration of the "
+            "cluster after each step to ensure that the deployment was successful"
+        )
         msg = type("Msg", (), {"content": content, "tool_calls": None})()
         messages = [{"role": "tool", "content": "result"}]
         # No natural ending + tool messages + GLM backend = truncated
