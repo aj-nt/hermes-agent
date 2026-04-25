@@ -48,3 +48,12 @@ from agent.kore.display_utils import (
     wrap_verbose,
     normalize_interim_visible_text,
 )
+
+from agent.kore.reasoning import (
+    resolved_api_call_stale_timeout_base,
+    supports_reasoning_extra_body,
+    github_models_reasoning_extra_body,
+    needs_kimi_tool_reasoning,
+    needs_deepseek_tool_reasoning,
+    copy_reasoning_content_for_api,
+)
