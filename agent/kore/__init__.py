@@ -26,3 +26,25 @@ from agent.kore.tool_calls import (
     VALID_API_ROLES,
     TOOL_CALL_ARGUMENTS_CORRUPTION_MARKER,
 )
+
+from agent.kore.responses_api import (
+    model_requires_responses_api,
+    provider_model_requires_responses_api,
+)
+
+from agent.kore.vision_utils import (
+    content_has_image_parts,
+    materialize_data_url_for_vision,
+)
+
+from agent.kore.client_lifecycle import (
+    is_openai_client_closed,
+    build_keepalive_http_client,
+    force_close_tcp_sockets,
+)
+
+from agent.kore.display_utils import (
+    summarize_background_review_actions,
+    wrap_verbose,
+    normalize_interim_visible_text,
+)

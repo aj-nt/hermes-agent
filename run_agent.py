@@ -433,6 +433,26 @@ from agent.kore.tool_calls import (
     VALID_API_ROLES as _KORE_VALID_API_ROLES,
     TOOL_CALL_ARGUMENTS_CORRUPTION_MARKER as _KORE_TOOL_CALL_ARGUMENTS_CORRUPTION_MARKER,
 )
+from agent.kore.responses_api import (
+    model_requires_responses_api as _kore_model_requires_responses_api,
+    provider_model_requires_responses_api as _kore_provider_model_requires_responses_api,
+)
+from agent.kore.think_blocks import has_natural_response_ending
+from agent.kore.vision_utils import (
+    content_has_image_parts as _kore_content_has_image_parts,
+    materialize_data_url_for_vision as _kore_materialize_data_url_for_vision,
+)
+from agent.kore.client_lifecycle import (
+    is_openai_client_closed as _kore_is_openai_client_closed,
+    build_keepalive_http_client as _kore_build_keepalive_http_client,
+    force_close_tcp_sockets as _kore_force_close_tcp_sockets,
+)
+from agent.kore.display_utils import (
+    summarize_background_review_actions as _kore_summarize_background_review_actions,
+    wrap_verbose as _kore_wrap_verbose,
+    normalize_interim_visible_text as _kore_normalize_interim_visible_text,
+)
+
 
 
 
@@ -2396,37 +2416,12 @@ class AIAgent:
         return False, False
 
     @staticmethod
-    def _model_requires_responses_api(model: str) -> bool:
-        """Return True for models that require the Responses API path.
-
-        GPT-5.x models are rejected on /v1/chat/completions by both
-        OpenAI and OpenRouter (error: ``unsupported_api_for_model``).
-        Detect these so the correct api_mode is set regardless of
-        which provider is serving the model.
-        """
-        m = model.lower()
-        # Strip vendor prefix (e.g. "openai/gpt-5.4" → "gpt-5.4")
-        if "/" in m:
-            m = m.rsplit("/", 1)[-1]
-        return m.startswith("gpt-5")
+    def _model_requires_responses_api(model):
+        return _kore_model_requires_responses_api(model)
 
     @staticmethod
-    def _provider_model_requires_responses_api(
-        model: str,
-        *,
-        provider: Optional[str] = None,
-    ) -> bool:
-        """Return True when this provider/model pair should use Responses API."""
-        normalized_provider = (provider or "").strip().lower()
-        if normalized_provider == "copilot":
-            try:
-                from hermes_cli.models import _should_use_copilot_responses_api
-                return _should_use_copilot_responses_api(model)
-            except Exception:
-                # Fall back to the generic GPT-5 rule if Copilot-specific
-                # logic is unavailable for any reason.
-                pass
-        return AIAgent._model_requires_responses_api(model)
+    def _provider_model_requires_responses_api(model, *, provider=None):
+        return _kore_provider_model_requires_responses_api(model, provider=provider)
 
     def _max_tokens_param(self, value: int) -> dict:
         """Return the correct max tokens kwarg for the current provider.
@@ -2448,8 +2443,7 @@ class AIAgent:
         return strip_think_blocks(content)
 
     @staticmethod
-    def _has_natural_response_ending(content: str) -> bool:
-        from agent.kore.think_blocks import has_natural_response_ending
+    def _has_natural_response_ending(content):
         return has_natural_response_ending(content)
 
 
@@ -2692,67 +2686,8 @@ class AIAgent:
     )
 
     @staticmethod
-    def _summarize_background_review_actions(
-        review_messages: List[Dict],
-        prior_snapshot: List[Dict],
-    ) -> List[str]:
-        """Build the human-facing action summary for a background review pass.
-
-        Walks the review agent's session messages and collects "successful tool
-        action" descriptions to surface to the user (e.g. "Memory updated").
-        Tool messages already present in ``prior_snapshot`` are skipped so we
-        don't re-surface stale results from the prior conversation that the
-        review agent inherited via ``conversation_history`` (issue #14944).
-
-        Matching is by ``tool_call_id`` when available, with a content-equality
-        fallback for tool messages that lack one.
-        """
-        existing_tool_call_ids = set()
-        existing_tool_contents = set()
-        for prior in prior_snapshot or []:
-            if not isinstance(prior, dict) or prior.get("role") != "tool":
-                continue
-            tcid = prior.get("tool_call_id")
-            if tcid:
-                existing_tool_call_ids.add(tcid)
-            else:
-                content = prior.get("content")
-                if isinstance(content, str):
-                    existing_tool_contents.add(content)
-
-        actions: List[str] = []
-        for msg in review_messages or []:
-            if not isinstance(msg, dict) or msg.get("role") != "tool":
-                continue
-            tcid = msg.get("tool_call_id")
-            if tcid and tcid in existing_tool_call_ids:
-                continue
-            if not tcid:
-                content_str = msg.get("content")
-                if isinstance(content_str, str) and content_str in existing_tool_contents:
-                    continue
-            try:
-                data = json.loads(msg.get("content", "{}"))
-            except (json.JSONDecodeError, TypeError):
-                continue
-            if not isinstance(data, dict) or not data.get("success"):
-                continue
-            message = data.get("message", "")
-            target = data.get("target", "")
-            if "created" in message.lower():
-                actions.append(message)
-            elif "updated" in message.lower():
-                actions.append(message)
-            elif "added" in message.lower() or (target and "add" in message.lower()):
-                label = "Memory" if target == "memory" else "User profile" if target == "user" else target
-                actions.append(f"{label} updated")
-            elif "Entry added" in message:
-                label = "Memory" if target == "memory" else "User profile" if target == "user" else target
-                actions.append(f"{label} updated")
-            elif "removed" in message.lower() or "replaced" in message.lower():
-                label = "Memory" if target == "memory" else "User profile" if target == "user" else target
-                actions.append(f"{label} updated")
-        return actions
+    def _summarize_background_review_actions(review_messages, prior_snapshot):
+        return _kore_summarize_background_review_actions(review_messages, prior_snapshot)
 
     def _spawn_background_review(
         self,
@@ -4159,59 +4094,12 @@ class AIAgent:
         return lock
 
     @staticmethod
-    def _is_openai_client_closed(client: Any) -> bool:
-        """Check if an OpenAI client is closed.
-
-        Handles both property and method forms of is_closed:
-        - httpx.Client.is_closed is a bool property
-        - openai.OpenAI.is_closed is a method returning bool
-
-        Prior bug: getattr(client, "is_closed", False) returned the bound method,
-        which is always truthy, causing unnecessary client recreation on every call.
-        """
-        from unittest.mock import Mock
-
-        if isinstance(client, Mock):
-            return False
-
-        is_closed_attr = getattr(client, "is_closed", None)
-        if is_closed_attr is not None:
-            # Handle method (openai SDK) vs property (httpx)
-            if callable(is_closed_attr):
-                if is_closed_attr():
-                    return True
-            elif bool(is_closed_attr):
-                return True
-
-        http_client = getattr(client, "_client", None)
-        if http_client is not None:
-            return bool(getattr(http_client, "is_closed", False))
-        return False
+    def _is_openai_client_closed(client):
+        return _kore_is_openai_client_closed(client)
 
     @staticmethod
-    def _build_keepalive_http_client(base_url: str = "") -> Any:
-        try:
-            import httpx as _httpx
-            import socket as _socket
-
-            _sock_opts = [(_socket.SOL_SOCKET, _socket.SO_KEEPALIVE, 1)]
-            if hasattr(_socket, "TCP_KEEPIDLE"):
-                _sock_opts.append((_socket.IPPROTO_TCP, _socket.TCP_KEEPIDLE, 30))
-                _sock_opts.append((_socket.IPPROTO_TCP, _socket.TCP_KEEPINTVL, 10))
-                _sock_opts.append((_socket.IPPROTO_TCP, _socket.TCP_KEEPCNT, 3))
-            elif hasattr(_socket, "TCP_KEEPALIVE"):
-                _sock_opts.append((_socket.IPPROTO_TCP, _socket.TCP_KEEPALIVE, 30))
-            # When a custom transport is provided, httpx won't auto-read proxy
-            # from env vars (allow_env_proxies = trust_env and transport is None).
-            # Explicitly read proxy settings while still honoring NO_PROXY for
-            # loopback / local endpoints such as a locally hosted sub2api.
-            _proxy = _get_proxy_for_base_url(base_url)
-            return _httpx.Client(
-                transport=_httpx.HTTPTransport(socket_options=_sock_opts),
-                proxy=_proxy,
-            )
-        except Exception:
-            return None
+    def _build_keepalive_http_client(base_url=""):
+        return _kore_build_keepalive_http_client(base_url=base_url)
 
     def _create_openai_client(self, client_kwargs: dict, *, reason: str, shared: bool) -> Any:
         from agent.auxiliary_client import _validate_base_url, _validate_proxy_env_urls
@@ -4305,63 +4193,8 @@ class AIAgent:
         return client
 
     @staticmethod
-    def _force_close_tcp_sockets(client: Any) -> int:
-        """Force-close underlying TCP sockets to prevent CLOSE-WAIT accumulation.
-
-        When a provider drops a connection mid-stream, httpx's ``client.close()``
-        performs a graceful shutdown which leaves sockets in CLOSE-WAIT until the
-        OS times them out (often minutes).  This method walks the httpx transport
-        pool and issues ``socket.shutdown(SHUT_RDWR)`` + ``socket.close()`` to
-        force an immediate TCP RST, freeing the file descriptors.
-
-        Returns the number of sockets force-closed.
-        """
-        import socket as _socket
-
-        closed = 0
-        try:
-            http_client = getattr(client, "_client", None)
-            if http_client is None:
-                return 0
-            transport = getattr(http_client, "_transport", None)
-            if transport is None:
-                return 0
-            pool = getattr(transport, "_pool", None)
-            if pool is None:
-                return 0
-            # httpx uses httpcore connection pools; connections live in
-            # _connections (list) or _pool (list) depending on version.
-            connections = (
-                getattr(pool, "_connections", None)
-                or getattr(pool, "_pool", None)
-                or []
-            )
-            for conn in list(connections):
-                stream = (
-                    getattr(conn, "_network_stream", None)
-                    or getattr(conn, "_stream", None)
-                )
-                if stream is None:
-                    continue
-                sock = getattr(stream, "_sock", None)
-                if sock is None:
-                    sock = getattr(stream, "stream", None)
-                    if sock is not None:
-                        sock = getattr(sock, "_sock", None)
-                if sock is None:
-                    continue
-                try:
-                    sock.shutdown(_socket.SHUT_RDWR)
-                except OSError:
-                    pass
-                try:
-                    sock.close()
-                except OSError:
-                    pass
-                closed += 1
-        except Exception as exc:
-            logger.debug("Force-close TCP sockets sweep error: %s", exc)
-        return closed
+    def _force_close_tcp_sockets(client):
+        return _kore_force_close_tcp_sockets(client)
 
     def _close_openai_client(self, client: Any, *, reason: str, shared: bool) -> None:
         if client is None:
@@ -5175,10 +5008,8 @@ class AIAgent:
             )
 
     @staticmethod
-    def _normalize_interim_visible_text(text: str) -> str:
-        if not isinstance(text, str):
-            return ""
-        return re.sub(r"\s+", " ", text).strip()
+    def _normalize_interim_visible_text(text):
+        return _kore_normalize_interim_visible_text(text)
 
     def _interim_content_was_streamed(self, content: str) -> bool:
         visible_content = self._normalize_interim_visible_text(
@@ -6457,34 +6288,12 @@ class AIAgent:
     # ── End provider fallback ──────────────────────────────────────────────
 
     @staticmethod
-    def _content_has_image_parts(content: Any) -> bool:
-        if not isinstance(content, list):
-            return False
-        for part in content:
-            if isinstance(part, dict) and part.get("type") in {"image_url", "input_image"}:
-                return True
-        return False
+    def _content_has_image_parts(content):
+        return _kore_content_has_image_parts(content)
 
     @staticmethod
-    def _materialize_data_url_for_vision(image_url: str) -> tuple[str, Optional[Path]]:
-        header, _, data = str(image_url or "").partition(",")
-        mime = "image/jpeg"
-        if header.startswith("data:"):
-            mime_part = header[len("data:"):].split(";", 1)[0].strip()
-            if mime_part.startswith("image/"):
-                mime = mime_part
-        suffix = {
-            "image/png": ".png",
-            "image/gif": ".gif",
-            "image/webp": ".webp",
-            "image/jpeg": ".jpg",
-            "image/jpg": ".jpg",
-        }.get(mime, ".jpg")
-        tmp = tempfile.NamedTemporaryFile(prefix="anthropic_image_", suffix=suffix, delete=False)
-        with tmp:
-            tmp.write(base64.b64decode(data))
-        path = Path(tmp.name)
-        return str(path), path
+    def _materialize_data_url_for_vision(image_url):
+        return _kore_materialize_data_url_for_vision(image_url)
 
     def _describe_image_for_anthropic_fallback(self, image_url: str, role: str) -> str:
         cache_key = hashlib.sha256(str(image_url or "").encode("utf-8")).hexdigest()
@@ -7473,29 +7282,8 @@ class AIAgent:
             )
 
     @staticmethod
-    def _wrap_verbose(label: str, text: str, indent: str = "     ") -> str:
-        """Word-wrap verbose tool output to fit the terminal width.
-
-        Splits *text* on existing newlines and wraps each line individually,
-        preserving intentional line breaks (e.g. pretty-printed JSON).
-        Returns a ready-to-print string with *label* on the first line and
-        continuation lines indented.
-        """
-        import shutil as _shutil
-        import textwrap as _tw
-        cols = _shutil.get_terminal_size((120, 24)).columns
-        wrap_width = max(40, cols - len(indent))
-        out_lines: list[str] = []
-        for raw_line in text.split("\n"):
-            if len(raw_line) <= wrap_width:
-                out_lines.append(raw_line)
-            else:
-                wrapped = _tw.wrap(raw_line, width=wrap_width,
-                                   break_long_words=True,
-                                   break_on_hyphens=False)
-                out_lines.extend(wrapped or [raw_line])
-        body = ("\n" + indent).join(out_lines)
-        return f"{indent}{label}{body}"
+    def _wrap_verbose(label, text, indent="     "):
+        return _kore_wrap_verbose(label, text, indent=indent)
 
     def _execute_tool_calls_concurrent(self, assistant_message, messages: list, effective_task_id: str, api_call_count: int = 0) -> None:
         """Execute multiple tool calls concurrently using a thread pool.
