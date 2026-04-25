@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Memory Tool Module — SQLite-Backed Three-Layer Persistent Memory
+Memory Tool Module — SQLite-Backed Four-Layer Persistent Memory
 
 Architecture:
   Layer 1 (HOT):  ~3KB injected into system prompt every turn.
@@ -9,6 +9,11 @@ Architecture:
                     searchable via FTS5. All reads and writes hit this layer.
   Layer 3 (COLD):  Session transcripts in state.db (sessions + messages tables).
                     Searched via session_search tool. No changes needed.
+  Layer 4 (RECENT CONTEXT): Auto-injected probe from recent session metadata.
+                    Built at system-prompt-build time from sessions table.
+                    Crash-safe — requires no agent action, always present
+                    at session start so the agent knows what it was just
+                    working on.
 
 Categories:
   user        → preferences, identity, boundaries (never auto-evicted)
@@ -36,6 +41,7 @@ import logging
 import re
 import sqlite3
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -252,7 +258,7 @@ class MemoryStore:
         self._migrated = False
         
         # Frozen snapshot for system prompt — set at load_from_disk()
-        self._system_prompt_snapshot: Dict[str, str] = {"memory": "", "user": ""}
+        self._system_prompt_snapshot: Dict[str, str] = {"memory": "", "user": "", "recent_context": ""}
     
     # -- Private: database access --
     
@@ -370,16 +376,22 @@ class MemoryStore:
     
     # -- Public API --
     
-    def load_from_disk(self):
+    def load_from_disk(self, current_session_id: str = ""):
         """Load memories from SQLite and capture hot memory snapshot.
         
         If memories table is empty, migrates from flat files first.
         Then builds the system prompt snapshot from hot entries.
+        Also builds the recent-context block from previous sessions.
+        
+        Args:
+            current_session_id: Current session ID, used to exclude it from
+                the recent-context block. Defaults to "" (no exclusion).
         """
         self._migrate_from_files()
         self._system_prompt_snapshot = {
             "memory": self._build_hot_block("memory"),
             "user": self._build_hot_block("user"),
+            "recent_context": self.build_recent_context_block(current_session_id=current_session_id),
         }
     
     def save_to_disk(self, target: str):
@@ -399,6 +411,112 @@ class MemoryStore:
         """
         block = self._system_prompt_snapshot.get(target, "")
         return block if block else None
+    
+    # ---- Recent context probe (session-start injection) ----
+    
+    # Maximum chars for the recent-context block (excluding header/separator)
+    RECENT_CONTEXT_CHAR_LIMIT = 500
+    
+    def build_recent_context_block(self, current_session_id: str = "") -> str:
+        """Build a compact recent-context block from previous sessions.
+        
+        Queries the sessions/messages tables for the 2 most recent sessions
+        that (a) are not the current session and (b) have at least one message.
+        Returns a formatted block suitable for system prompt injection,
+        or empty string if no suitable sessions exist or the tables
+        are unavailable.
+        
+        This is called at system prompt build time (session start) so the
+        agent automatically knows what it was just working on, without
+        needing to call session_search manually.
+        
+        Args:
+            current_session_id: The current session's ID to exclude from results.
+        """
+        try:
+            conn = self._db._conn if hasattr(self._db, '_conn') else self._db
+            cursor = conn.cursor()
+            
+            # Check that the sessions table exists
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'"
+            )
+            if not cursor.fetchone():
+                return ""
+            
+            # Check that the messages table exists
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='messages'"
+            )
+            if not cursor.fetchone():
+                return ""
+            
+            # Query up to 4 recent sessions (fetch extra so we can filter
+            # the current session and empty sessions), then take top 2.
+            # Exclude child sessions (parent_session_id IS NULL).
+            # Exclude the current session.
+            # Require at least 1 message (via subquery).
+            query = """
+                SELECT s.id, s.title, s.started_at,
+                       (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS msg_count,
+                       COALESCE(
+                           (SELECT SUBSTR(REPLACE(REPLACE(m.content, X'0A', ' '), X'0D', ' '), 1, 60)
+                            FROM messages m
+                            WHERE m.session_id = s.id AND m.role = 'user' AND m.content IS NOT NULL
+                            ORDER BY m.timestamp, m.id LIMIT 1),
+                           ''
+                       ) AS preview
+                FROM sessions s
+                WHERE s.parent_session_id IS NULL
+                  AND s.id != ?
+                  AND (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) > 0
+                ORDER BY s.started_at DESC
+                LIMIT 2
+            """
+            cursor.execute(query, (current_session_id,))
+            rows = cursor.fetchall()
+            
+            if not rows:
+                return ""
+            
+            entries = []
+            for row in rows:
+                session_id, title, started_at, msg_count, preview = (
+                    row[0], row[1], row[2], row[3], row[4]
+                )
+                
+                # Format timestamp
+                if started_at:
+                    try:
+                        ts = datetime.fromtimestamp(started_at, tz=timezone.utc)
+                        time_str = ts.strftime("%b %d %H:%M")
+                    except (OSError, ValueError):
+                        time_str = ""
+                else:
+                    time_str = ""
+                
+                # Use title if available, otherwise preview
+                label = title.strip() if title else (preview.strip() if preview else "Untitled")
+                
+                entry = f"- [{time_str}] {label} ({msg_count} msgs)"
+                entries.append(entry)
+            
+            if not entries:
+                return ""
+            
+            content = "\n".join(entries)
+            
+            # Truncate to budget
+            if len(content) > self.RECENT_CONTEXT_CHAR_LIMIT:
+                content = content[:self.RECENT_CONTEXT_CHAR_LIMIT - 3] + "..."
+            
+            header = "RECENT CONTEXT (auto-injected from last sessions)"
+            separator = "═" * 46
+            return f"{separator}\n{header}\n{separator}\n{content}"
+        
+        except Exception:
+            # Graceful degradation — never break the agent
+            return ""
     
     # ---- Core operations ----
     

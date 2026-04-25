@@ -1381,7 +1381,7 @@ class AIAgent:
                         memory_char_limit=mem_config.get("memory_char_limit", 3000),
                         user_char_limit=mem_config.get("user_char_limit", 1500),
                     )
-                    self._memory_store.load_from_disk()
+                    self._memory_store.load_from_disk(current_session_id=self.session_id)
             except Exception:
                 pass  # Memory is optional -- don't break agent init
         
@@ -3720,6 +3720,12 @@ class AIAgent:
                 user_block = self._memory_store.format_for_system_prompt("user")
                 if user_block:
                     prompt_parts.append(user_block)
+            # Recent context: auto-injected probe showing what the agent
+            # was working on in previous sessions. Crash-safe — built from
+            # session DB at prompt-build time, not requiring agent action.
+            recent_block = self._memory_store.format_for_system_prompt("recent_context")
+            if recent_block:
+                prompt_parts.append(recent_block)
 
         # Vault auto-injection (Layer 3) — reads working-context.md and
         # user-profile.md from the Obsidian vault and injects them into
@@ -3949,7 +3955,7 @@ class AIAgent:
         """
         self._cached_system_prompt = None
         if self._memory_store:
-            self._memory_store.load_from_disk()
+            self._memory_store.load_from_disk(current_session_id=self.session_id)
 
     @staticmethod
     @staticmethod
