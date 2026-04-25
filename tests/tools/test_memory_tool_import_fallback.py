@@ -22,10 +22,12 @@ def test_memory_tool_imports_without_fcntl(monkeypatch, tmp_path):
     memory_tool = importlib.import_module("tools.memory_tool")
     monkeypatch.setattr(memory_tool, "get_memory_dir", lambda: tmp_path)
 
+    # MemoryStore now accepts db=None (creates in-memory SQLite)
     store = memory_tool.MemoryStore(memory_char_limit=200, user_char_limit=200)
-    store.load_from_disk()
-    result = store.add("memory", "fact learned during import fallback test")
+    result = store.add("memory", "fact learned during import fallback test",
+                       category="environment", key="import_test")
 
-    assert memory_tool.fcntl is None
+    # No fcntl import needed anymore (SQLite handles concurrency)
+    assert not hasattr(memory_tool, 'fcntl') or memory_tool.fcntl is None
     assert registry.get_entry("memory") is not None
     assert result["success"] is True

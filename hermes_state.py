@@ -31,7 +31,7 @@ T = TypeVar("T")
 
 DEFAULT_DB_PATH = get_hermes_home() / "state.db"
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -394,6 +394,85 @@ class SessionDB:
                     pass  # Table already exists
                 cursor.execute("UPDATE schema_version SET version = 9")
                 needs_reindex = True
+            if current_version < 10:
+                # v10: memories table — structured persistent memory with FTS5.
+                # Replaces flat MEMORY.md/USER.md with SQLite-backed storage
+                # supporting categories, priorities, search, and auto-eviction.
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS memories (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        target TEXT NOT NULL CHECK(target IN ('memory', 'user')),
+                        category TEXT NOT NULL CHECK(category IN (
+                            'user', 'environment', 'quirk', 'project', 'observation'
+                        )),
+                        key TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        priority INTEGER NOT NULL DEFAULT 3 CHECK(priority BETWEEN 1 AND 5),
+                        created_at REAL NOT NULL DEFAULT (strftime('%s','now')),
+                        updated_at REAL NOT NULL DEFAULT (strftime('%s','now')),
+                        last_accessed REAL NOT NULL DEFAULT (strftime('%s','now')),
+                        source_session TEXT,
+                        access_count INTEGER NOT NULL DEFAULT 0,
+                        expires_at REAL,
+                        UNIQUE(target, key)
+                    )
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_memories_target_cat
+                    ON memories(target, category)
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_memories_priority
+                    ON memories(priority DESC)
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_memories_last_accessed
+                    ON memories(last_accessed DESC)
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_memories_expires
+                    ON memories(expires_at) WHERE expires_at IS NOT NULL
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_memories_source_session
+                    ON memories(source_session)
+                """)
+                # FTS5 virtual table for content search
+                try:
+                    cursor.execute("""
+                        CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                            content,
+                            content='memories',
+                            content_rowid='id'
+                        )
+                    """)
+                except sqlite3.OperationalError:
+                    pass  # Already exists
+                # Triggers to keep FTS in sync
+                cursor.execute("""
+                    CREATE TRIGGER IF NOT EXISTS memories_fts_insert
+                    AFTER INSERT ON memories BEGIN
+                        INSERT INTO memories_fts(rowid, content)
+                        VALUES (new.id, new.content);
+                    END
+                """)
+                cursor.execute("""
+                    CREATE TRIGGER IF NOT EXISTS memories_fts_delete
+                    AFTER DELETE ON memories BEGIN
+                        INSERT INTO memories_fts(memories_fts, rowid, content)
+                        VALUES('delete', old.id, old.content);
+                    END
+                """)
+                cursor.execute("""
+                    CREATE TRIGGER IF NOT EXISTS memories_fts_update
+                    AFTER UPDATE ON memories BEGIN
+                        INSERT INTO memories_fts(memories_fts, rowid, content)
+                        VALUES('delete', old.id, old.content);
+                        INSERT INTO memories_fts(rowid, content)
+                        VALUES (new.id, new.content);
+                    END
+                """)
+                cursor.execute("UPDATE schema_version SET version = 10")
 
         # Unique title index — always ensure it exists (safe to run after migrations
         # since the title column is guaranteed to exist at this point)

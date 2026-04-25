@@ -1377,8 +1377,9 @@ class AIAgent:
                 if self._memory_enabled or self._user_profile_enabled:
                     from tools.memory_tool import MemoryStore
                     self._memory_store = MemoryStore(
-                        memory_char_limit=mem_config.get("memory_char_limit", 2200),
-                        user_char_limit=mem_config.get("user_char_limit", 1375),
+                        db=self._session_db,
+                        memory_char_limit=mem_config.get("memory_char_limit", 3000),
+                        user_char_limit=mem_config.get("user_char_limit", 1500),
                     )
                     self._memory_store.load_from_disk()
             except Exception:
@@ -6962,6 +6963,10 @@ class AIAgent:
                 target=target,
                 content=function_args.get("content"),
                 old_text=function_args.get("old_text"),
+                category=function_args.get("category"),
+                key=function_args.get("key"),
+                priority=function_args.get("priority"),
+                query=function_args.get("query"),
                 store=self._memory_store,
             )
             # Bridge: notify external memory provider of built-in memory writes
@@ -7469,6 +7474,10 @@ class AIAgent:
                     target=target,
                     content=function_args.get("content"),
                     old_text=function_args.get("old_text"),
+                    category=function_args.get("category"),
+                    key=function_args.get("key"),
+                    priority=function_args.get("priority"),
+                    query=function_args.get("query"),
                     store=self._memory_store,
                 )
                 # Bridge: notify external memory provider of built-in memory writes
