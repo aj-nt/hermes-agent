@@ -462,6 +462,14 @@ from agent.kore.display_utils import (
     normalize_interim_visible_text as _kore_normalize_interim_visible_text,
 )
 
+from agent.kore.url_helpers import (
+    is_direct_openai_url as _kore_is_direct_openai_url,
+    is_openrouter_url as _kore_is_openrouter_url,
+    is_qwen_portal as _kore_is_qwen_portal,
+    max_tokens_param as _kore_max_tokens_param,
+)
+
+
 
 
 
@@ -2279,14 +2287,7 @@ class AIAgent:
                 pass
 
     def _is_direct_openai_url(self, base_url: str = None) -> bool:
-        """Return True when a base URL targets OpenAI's native API."""
-        if base_url is not None:
-            hostname = base_url_hostname(base_url)
-        else:
-            hostname = getattr(self, "_base_url_hostname", "") or base_url_hostname(
-                getattr(self, "_base_url_lower", "")
-            )
-        return hostname == "api.openai.com"
+        return _kore_is_direct_openai_url(base_url=base_url, base_url_lower=self._base_url_lower, base_url_hostname_val=self._base_url_hostname if hasattr(self, "_base_url_hostname") else "")
 
     def _resolved_api_call_timeout(self) -> float:
         """Resolve the effective per-call request timeout in seconds.
@@ -2326,8 +2327,7 @@ class AIAgent:
         return stale_base
 
     def _is_openrouter_url(self) -> bool:
-        """Return True when the base URL targets OpenRouter."""
-        return base_url_host_matches(self._base_url_lower, "openrouter.ai")
+        return _kore_is_openrouter_url(self._base_url_lower)
 
     def _anthropic_prompt_cache_policy(
         self,
@@ -2412,15 +2412,7 @@ class AIAgent:
         return _kore_provider_model_requires_responses_api(model, provider=provider)
 
     def _max_tokens_param(self, value: int) -> dict:
-        """Return the correct max tokens kwarg for the current provider.
-        
-        OpenAI's newer models (gpt-4o, o-series, gpt-5+) require
-        'max_completion_tokens'. OpenRouter, local models, and older
-        OpenAI models use 'max_tokens'.
-        """
-        if self._is_direct_openai_url():
-            return {"max_completion_tokens": value}
-        return {"max_tokens": value}
+        return _kore_max_tokens_param(value, is_direct_openai=self._is_direct_openai_url())
 
     def _has_content_after_think_block(self, content: str) -> bool:
         from agent.kore.think_blocks import has_content_after_think_block
@@ -6445,8 +6437,7 @@ class AIAgent:
         )
 
     def _is_qwen_portal(self) -> bool:
-        """Return True when the base URL targets Qwen Portal."""
-        return base_url_host_matches(self._base_url_lower, "portal.qwen.ai")
+        return _kore_is_qwen_portal(self._base_url_lower)
 
     def _qwen_prepare_chat_messages(self, api_messages: list) -> list:
         prepared = copy.deepcopy(api_messages)
