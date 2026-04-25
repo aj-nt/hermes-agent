@@ -1655,6 +1655,205 @@ class SessionDB:
         logger.info("Reindexed term_index: %d entries from %d messages", inserted, total)
         return inserted
 
+    def backfill_messages_from_json(
+        self,
+        sessions_dir: Path = None,
+    ) -> int:
+        """Scan JSON session files for sessions missing from the messages table.
+
+        Sessions created while running code without ``append_message()`` / term
+        index support (e.g. old ``main``) have JSON files on disk but no
+        corresponding rows in ``messages``.  This method:
+
+        1.  Scans ``sessions/session_*.json`` for session IDs.
+        2.  Finds which sessions are missing from the ``messages`` table
+            (either the session row doesn't exist, or it exists but has 0
+            messages).
+        3.  Parses each missing session's JSON file and inserts both the
+            session row (if absent) and all its messages.
+        4.  Reindexes the term index to pick up new terms.
+
+        Returns the total number of messages inserted.
+
+        Idempotent: sessions that already have messages are skipped, so
+        calling this twice returns 0 the second time.
+        """
+        if sessions_dir is None:
+            sessions_dir = DEFAULT_DB_PATH.parent / "sessions"
+
+        sessions_dir = Path(sessions_dir)
+        if not sessions_dir.is_dir():
+            logger.warning("Sessions directory not found: %s", sessions_dir)
+            return 0
+
+        import glob as _glob
+
+        # ── Phase 1: discover which sessions need backfill ──────────
+        json_files = sorted(sessions_dir.glob("session_*.json"))
+        if not json_files:
+            return 0
+
+        # Extract session IDs from filenames (session_20260410_022816_1b7721.json
+        # -> 20260410_022816_1b7721)
+        file_to_sid = {}
+        for f in json_files:
+            sid = f.stem.replace("session_", "")
+            file_to_sid[f] = sid
+
+        # Find session IDs that have no messages in the DB
+        all_sids = set(file_to_sid.values())
+        with self._lock:
+            placeholders = ",".join("?" * len(all_sids))
+            rows = self._conn.execute(
+                f"SELECT s.id FROM sessions s "
+                f"INNER JOIN messages m ON m.session_id = s.id "
+                f"WHERE s.id IN ({placeholders})",
+                list(all_sids),
+            ).fetchall()
+            sids_with_messages = {r["id"] if hasattr(r, "keys") else r[0] for r in rows}
+
+        sids_needing_backfill = all_sids - sids_with_messages
+        if not sids_needing_backfill:
+            logger.info("backfill: all sessions already have messages")
+            return 0
+
+        logger.info(
+            "backfill: %d of %d sessions need message import",
+            len(sids_needing_backfill), len(all_sids),
+        )
+
+        # ── Phase 2: insert session rows and messages ───────────────
+        total_inserted = 0
+        from term_index import extract_terms
+
+        for f, sid in file_to_sid.items():
+            if sid not in sids_needing_backfill:
+                continue
+
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.warning("backfill: skipping %s: %s", f.name, exc)
+                continue
+
+            messages = data.get("messages") or []
+            if not messages:
+                # Create the session row even if empty, so we track it
+                self._ensure_session_from_json(sid, data)
+                continue
+
+            # Ensure session row exists
+            self._ensure_session_from_json(sid, data)
+
+            # Insert messages.  We synthesise monotonically increasing
+            # timestamps from session_start since JSON messages lack them.
+            base_ts = self._parse_session_start(data.get("session_start"))
+            msg_idx = 0
+
+            for msg in messages:
+                role = msg.get("role", "unknown")
+                content = msg.get("content")
+                tool_calls = msg.get("tool_calls")
+                tool_call_id = msg.get("tool_call_id")
+                finish_reason = msg.get("finish_reason")
+                reasoning = msg.get("reasoning") if role == "assistant" else None
+
+                # Synthesise timestamp: base_ts + sequential offset
+                timestamp = base_ts + msg_idx
+                msg_idx += 1
+
+                def _insert_msg(conn, _sid=sid, _role=role, _content=content,
+                                _tc=tool_calls, _tci=tool_call_id,
+                                _fr=finish_reason, _reasoning=reasoning,
+                                _ts=timestamp, _msg=msg, _extract=extract_terms):
+                    tool_calls_json = json.dumps(_tc) if _tc else None
+                    cursor = conn.execute(
+                        """INSERT INTO messages (session_id, role, content,
+                           tool_call_id, tool_calls, tool_name, timestamp,
+                           token_count, finish_reason, reasoning)
+                           VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?)""",
+                        (
+                            _sid,
+                            _role,
+                            _content,
+                            _tci,
+                            tool_calls_json,
+                            _ts,
+                            _fr,
+                            _reasoning,
+                        ),
+                    )
+                    msg_id = cursor.lastrowid
+
+                    # Increment message_count on the session row
+                    conn.execute(
+                        "UPDATE sessions SET message_count = message_count + 1 "
+                        "WHERE id = ?",
+                        (_sid,),
+                    )
+
+                    # Term indexing: skip tool-role messages (noise)
+                    if _content and _role != "tool":
+                        try:
+                            terms = _extract(_content)
+                            if terms:
+                                conn.executemany(
+                                    "INSERT OR IGNORE INTO term_index "
+                                    "(term, message_id, session_id) VALUES (?, ?, ?)",
+                                    [(t, msg_id, _sid) for t in terms],
+                                )
+                        except Exception:
+                            pass  # Term indexing is best-effort
+
+                    return 1
+
+                total_inserted += self._execute_write(_insert_msg)
+
+        logger.info(
+            "backfill: inserted %d messages from %d sessions",
+            total_inserted, len(sids_needing_backfill),
+        )
+
+        # Phase 3: reindex to ensure consistency (the per-message inserts
+        # above already indexed individual messages, but a full reindex
+        # guarantees the term_index is consistent with the messages table)
+        self.reindex_term_index()
+
+        return total_inserted
+
+    def _ensure_session_from_json(self, session_id: str, data: dict) -> None:
+        """Create a session row from JSON data if it doesn't already exist."""
+        model = data.get("model")
+        platform = data.get("platform", "cli")
+        system_prompt = data.get("system_prompt")
+        session_start = data.get("session_start")
+        started_at = self._parse_session_start(session_start) if session_start else time.time()
+
+        def _do(conn):
+            conn.execute(
+                """INSERT OR IGNORE INTO sessions (id, source, model, system_prompt, started_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (session_id, platform, model, system_prompt, started_at),
+            )
+        self._execute_write(_do)
+
+    @staticmethod
+    def _parse_session_start(session_start: str) -> float:
+        """Parse ISO-format session_start to Unix timestamp.
+
+        Falls back to current time if parsing fails.
+        """
+        if not session_start:
+            return time.time()
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+            try:
+                from datetime import datetime
+                dt = datetime.strptime(session_start, fmt)
+                return dt.timestamp()
+            except (ValueError, TypeError):
+                continue
+        return time.time()
+
     def search_sessions(
         self,
         source: str = None,
