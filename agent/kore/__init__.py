@@ -64,3 +64,13 @@ from agent.kore.url_helpers import (
     is_qwen_portal,
     max_tokens_param,
 )
+
+from agent.kore.message_prep import (
+    qwen_prepare_chat_messages,
+    qwen_prepare_chat_messages_inplace,
+)
+
+from agent.kore.reasoning import (
+    extract_reasoning,
+    get_messages_up_to_last_assistant,
+)

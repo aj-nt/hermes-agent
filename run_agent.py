@@ -446,6 +446,8 @@ from agent.kore.reasoning import (
     needs_kimi_tool_reasoning as _kore_needs_kimi_tool_reasoning,
     needs_deepseek_tool_reasoning as _kore_needs_deepseek_tool_reasoning,
     copy_reasoning_content_for_api as _kore_copy_reasoning_content_for_api,
+    extract_reasoning as _kore_extract_reasoning,
+    get_messages_up_to_last_assistant as _kore_get_messages_up_to_last_assistant,
 )
 from agent.kore.vision_utils import (
     content_has_image_parts as _kore_content_has_image_parts,
@@ -467,6 +469,11 @@ from agent.kore.url_helpers import (
     is_openrouter_url as _kore_is_openrouter_url,
     is_qwen_portal as _kore_is_qwen_portal,
     max_tokens_param as _kore_max_tokens_param,
+)
+
+from agent.kore.message_prep import (
+    qwen_prepare_chat_messages as _kore_qwen_prepare_chat_messages,
+    qwen_prepare_chat_messages_inplace as _kore_qwen_prepare_chat_messages_inplace,
 )
 
 
@@ -2530,72 +2537,8 @@ class AIAgent:
         return (user_targets_workspace or assistant_targets_workspace) and assistant_mentions_action
     
     
-    def _extract_reasoning(self, assistant_message) -> Optional[str]:
-        """
-        Extract reasoning/thinking content from an assistant message.
-        
-        OpenRouter and various providers can return reasoning in multiple formats:
-        1. message.reasoning - Direct reasoning field (DeepSeek, Qwen, etc.)
-        2. message.reasoning_content - Alternative field (Moonshot AI, Novita, etc.)
-        3. message.reasoning_details - Array of {type, summary, ...} objects (OpenRouter unified)
-        
-        Args:
-            assistant_message: The assistant message object from the API response
-            
-        Returns:
-            Combined reasoning text, or None if no reasoning found
-        """
-        reasoning_parts = []
-        
-        # Check direct reasoning field
-        if hasattr(assistant_message, 'reasoning') and assistant_message.reasoning:
-            reasoning_parts.append(assistant_message.reasoning)
-        
-        # Check reasoning_content field (alternative name used by some providers)
-        if hasattr(assistant_message, 'reasoning_content') and assistant_message.reasoning_content:
-            # Don't duplicate if same as reasoning
-            if assistant_message.reasoning_content not in reasoning_parts:
-                reasoning_parts.append(assistant_message.reasoning_content)
-        
-        # Check reasoning_details array (OpenRouter unified format)
-        # Format: [{"type": "reasoning.summary", "summary": "...", ...}, ...]
-        if hasattr(assistant_message, 'reasoning_details') and assistant_message.reasoning_details:
-            for detail in assistant_message.reasoning_details:
-                if isinstance(detail, dict):
-                    # Extract summary from reasoning detail object
-                    summary = (
-                        detail.get('summary')
-                        or detail.get('thinking')
-                        or detail.get('content')
-                        or detail.get('text')
-                    )
-                    if summary and summary not in reasoning_parts:
-                        reasoning_parts.append(summary)
-
-        # Some providers embed reasoning directly inside assistant content
-        # instead of returning structured reasoning fields.  Only fall back
-        # to inline extraction when no structured reasoning was found.
-        content = getattr(assistant_message, "content", None)
-        if not reasoning_parts and isinstance(content, str) and content:
-            inline_patterns = (
-                r"<think>(.*?)</think>",
-                r"<thinking>(.*?)</thinking>",
-                r"<thought>(.*?)</thought>",
-                r"<reasoning>(.*?)</reasoning>",
-                r"<REASONING_SCRATCHPAD>(.*?)</REASONING_SCRATCHPAD>",
-            )
-            for pattern in inline_patterns:
-                flags = re.DOTALL | re.IGNORECASE
-                for block in re.findall(pattern, content, flags=flags):
-                    cleaned = block.strip()
-                    if cleaned and cleaned not in reasoning_parts:
-                        reasoning_parts.append(cleaned)
-        
-        # Combine all reasoning parts
-        if reasoning_parts:
-            return "\n\n".join(reasoning_parts)
-        
-        return None
+    def _extract_reasoning(self, assistant_message):
+        return _kore_extract_reasoning(assistant_message)
 
     def _cleanup_task_resources(self, task_id: str) -> None:
         """Clean up VM and browser resources for a given task.
@@ -2863,36 +2806,8 @@ class AIAgent:
         except Exception as e:
             logger.warning("Session DB append_message failed: %s", e)
 
-    def _get_messages_up_to_last_assistant(self, messages: List[Dict]) -> List[Dict]:
-        """
-        Get messages up to (but not including) the last assistant turn.
-        
-        This is used when we need to "roll back" to the last successful point
-        in the conversation, typically when the final assistant message is
-        incomplete or malformed.
-        
-        Args:
-            messages: Full message list
-            
-        Returns:
-            Messages up to the last complete assistant turn (ending with user/tool message)
-        """
-        if not messages:
-            return []
-        
-        # Find the index of the last assistant message
-        last_assistant_idx = None
-        for i in range(len(messages) - 1, -1, -1):
-            if messages[i].get("role") == "assistant":
-                last_assistant_idx = i
-                break
-        
-        if last_assistant_idx is None:
-            # No assistant message found, return all messages
-            return messages.copy()
-        
-        # Return everything up to (not including) the last assistant message
-        return messages[:last_assistant_idx]
+    def _get_messages_up_to_last_assistant(self, messages: List[Dict]):
+        return _kore_get_messages_up_to_last_assistant(messages)
     
     def _format_tools_for_system_message(self) -> str:
         """
@@ -6439,66 +6354,11 @@ class AIAgent:
     def _is_qwen_portal(self) -> bool:
         return _kore_is_qwen_portal(self._base_url_lower)
 
-    def _qwen_prepare_chat_messages(self, api_messages: list) -> list:
-        prepared = copy.deepcopy(api_messages)
-        if not prepared:
-            return prepared
+    def _qwen_prepare_chat_messages(self, api_messages: list):
+        return _kore_qwen_prepare_chat_messages(api_messages)
 
-        for msg in prepared:
-            if not isinstance(msg, dict):
-                continue
-            content = msg.get("content")
-            if isinstance(content, str):
-                msg["content"] = [{"type": "text", "text": content}]
-            elif isinstance(content, list):
-                # Normalize: convert bare strings to text dicts, keep dicts as-is.
-                # deepcopy already created independent copies, no need for dict().
-                normalized_parts = []
-                for part in content:
-                    if isinstance(part, str):
-                        normalized_parts.append({"type": "text", "text": part})
-                    elif isinstance(part, dict):
-                        normalized_parts.append(part)
-                if normalized_parts:
-                    msg["content"] = normalized_parts
-
-        # Inject cache_control on the last part of the system message.
-        for msg in prepared:
-            if isinstance(msg, dict) and msg.get("role") == "system":
-                content = msg.get("content")
-                if isinstance(content, list) and content and isinstance(content[-1], dict):
-                    content[-1]["cache_control"] = {"type": "ephemeral"}
-                break
-
-        return prepared
-
-    def _qwen_prepare_chat_messages_inplace(self, messages: list) -> None:
-        """In-place variant — mutates an already-copied message list."""
-        if not messages:
-            return
-
-        for msg in messages:
-            if not isinstance(msg, dict):
-                continue
-            content = msg.get("content")
-            if isinstance(content, str):
-                msg["content"] = [{"type": "text", "text": content}]
-            elif isinstance(content, list):
-                normalized_parts = []
-                for part in content:
-                    if isinstance(part, str):
-                        normalized_parts.append({"type": "text", "text": part})
-                    elif isinstance(part, dict):
-                        normalized_parts.append(part)
-                if normalized_parts:
-                    msg["content"] = normalized_parts
-
-        for msg in messages:
-            if isinstance(msg, dict) and msg.get("role") == "system":
-                content = msg.get("content")
-                if isinstance(content, list) and content and isinstance(content[-1], dict):
-                    content[-1]["cache_control"] = {"type": "ephemeral"}
-                break
+    def _qwen_prepare_chat_messages_inplace(self, messages: list):
+        return _kore_qwen_prepare_chat_messages_inplace(messages)
 
     def _build_api_kwargs(self, api_messages: list) -> dict:
         """Build the keyword arguments dict for the active API mode."""

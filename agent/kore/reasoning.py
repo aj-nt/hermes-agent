@@ -10,7 +10,8 @@ methods become thin delegations passing self.model, self.provider, etc.
 """
 
 import os
-from typing import Optional, Tuple
+import re
+from typing import Dict, List, Optional, Tuple
 
 from utils import base_url_host_matches
 from hermes_cli.timeouts import get_provider_stale_timeout
@@ -181,3 +182,103 @@ def copy_reasoning_content_for_api(
         or needs_deepseek_tool_reasoning(provider, base_url, model)
     ):
         api_msg["reasoning_content"] = ""
+
+
+def extract_reasoning(assistant_message) -> Optional[str]:
+    """
+    Extract reasoning/thinking content from an assistant message.
+
+    OpenRouter and various providers can return reasoning in multiple formats:
+    1. message.reasoning - Direct reasoning field (DeepSeek, Qwen, etc.)
+    2. message.reasoning_content - Alternative field (Moonshot AI, Novita, etc.)
+    3. message.reasoning_details - Array of {type, summary, ...} objects (OpenRouter unified)
+
+    Args:
+        assistant_message: The assistant message object from the API response
+
+    Returns:
+        Combined reasoning text, or None if no reasoning found
+    """
+    reasoning_parts = []
+
+    # Check direct reasoning field
+    if hasattr(assistant_message, 'reasoning') and assistant_message.reasoning:
+        reasoning_parts.append(assistant_message.reasoning)
+
+    # Check reasoning_content field (alternative name used by some providers)
+    if hasattr(assistant_message, 'reasoning_content') and assistant_message.reasoning_content:
+        # Don't duplicate if same as reasoning
+        if assistant_message.reasoning_content not in reasoning_parts:
+            reasoning_parts.append(assistant_message.reasoning_content)
+
+    # Check reasoning_details array (OpenRouter unified format)
+    # Format: [{"type": "reasoning.summary", "summary": "...", ...}, ...]
+    if hasattr(assistant_message, 'reasoning_details') and assistant_message.reasoning_details:
+        for detail in assistant_message.reasoning_details:
+            if isinstance(detail, dict):
+                # Extract summary from reasoning detail object
+                summary = (
+                    detail.get('summary')
+                    or detail.get('thinking')
+                    or detail.get('content')
+                    or detail.get('text')
+                )
+                if summary and summary not in reasoning_parts:
+                    reasoning_parts.append(summary)
+
+    # Some providers embed reasoning directly inside assistant content
+    # instead of returning structured reasoning fields.  Only fall back
+    # to inline extraction when no structured reasoning was found.
+    content = getattr(assistant_message, "content", None)
+    if not reasoning_parts and isinstance(content, str) and content:
+        inline_patterns = (
+            r"<think>(.*?)</think>",
+            r"<thinking>(.*?)</thinking>",
+            r"<thought>(.*?)</thought>",
+            r"<reasoning>(.*?)</reasoning>",
+            r"<REASONING_SCRATCHPAD>(.*?)</REASONING_SCRATCHPAD>",
+        )
+        for pattern in inline_patterns:
+            flags = re.DOTALL | re.IGNORECASE
+            for block in re.findall(pattern, content, flags=flags):
+                cleaned = block.strip()
+                if cleaned and cleaned not in reasoning_parts:
+                    reasoning_parts.append(cleaned)
+
+    # Combine all reasoning parts
+    if reasoning_parts:
+        return "\n\n".join(reasoning_parts)
+
+    return None
+
+
+def get_messages_up_to_last_assistant(messages: List[Dict]) -> List[Dict]:
+    """
+    Get messages up to (but not including) the last assistant turn.
+
+    This is used when we need to "roll back" to the last successful point
+    in the conversation, typically when the final assistant message is
+    incomplete or malformed.
+
+    Args:
+        messages: Full message list
+
+    Returns:
+        Messages up to the last complete assistant turn (ending with user/tool message)
+    """
+    if not messages:
+        return []
+
+    # Find the index of the last assistant message
+    last_assistant_idx = None
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("role") == "assistant":
+            last_assistant_idx = i
+            break
+
+    if last_assistant_idx is None:
+        # No assistant message found, return all messages
+        return messages.copy()
+
+    # Return everything up to (not including) the last assistant message
+    return messages[:last_assistant_idx]
