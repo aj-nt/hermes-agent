@@ -1564,6 +1564,10 @@ class AIAgent:
         from tools.todo_tool import TodoStore
         self._todo_store = TodoStore()
 
+        # Vault injection (Layer 3) — disabled by default; enable via config
+        self._vault_enabled = False
+        self._vault_path = None
+
         # Layer 4: Checkpoint store (session resumption across compression)
         from agent.checkpoint_store import CheckpointStore
         self._checkpoint_store = CheckpointStore()
