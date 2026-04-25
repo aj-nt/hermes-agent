@@ -1,12 +1,12 @@
 # aj-nt/hermes-agent
 
-Community-maintained fork of [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent), tracking upstream with production-hardened bug fixes and features that haven't been merged yet.
+Independent project sharing git history with [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent). All 8 upstream PRs were closed without merging (2025-04-25), so this fork diverges freely with production-hardened bug fixes and features that upstream hasn't accepted.
 
 **I run this in production daily.** Every patch on the `dogfood` branch has been tested against real workloads, not just unit tests.
 
 ## What's different from upstream
 
-The `dogfood` branch includes these unmerged upstream PRs plus fork-exclusive improvements:
+The `dogfood` branch is 33 commits ahead of upstream `main`, including:
 
 ### Bug fixes
 
@@ -19,25 +19,39 @@ The `dogfood` branch includes these unmerged upstream PRs plus fork-exclusive im
 | JSONDecodeError misclassified as local validation error | [#14366](https://github.com/NousResearch/hermes-agent/pull/14366) | P2 |
 | State-sync output leaked to terminal | [#15469](https://github.com/NousResearch/hermes-agent/pull/15469) | P1 |
 | Delegation fails for local providers without API keys | fork-only | P2 |
+| Vault init AttributeError | fork-only | P1 |
+| Red-team QA (5 bugs) | fork-only | P2 |
 
 ### Features
 
 | Feature | Upstream PR | Notes |
 |---------|-------------|-------|
-| Checkpoint tool — save task state before compression | [#14351](https://github.com/NousResearch/hermes-agent/pull/14351) | 9 commits |
+| Checkpoint tool | [#14351](https://github.com/NousResearch/hermes-agent/pull/14351) | Save task state before compression |
 | Term index instant search | [#13794](https://github.com/NousResearch/hermes-agent/pull/13794) | FTS5 inverted index |
+| Session backfill from JSON | fork-only | Recover sessions from raw files |
 
 ### Internal refactoring (Kore)
 
-These extract modules from `run_agent.py` to make future patches smaller and rebase cleaner:
+Module extractions from `run_agent.py` (12,880 -> 12,613 lines). Pure functions, no behavioral changes:
 
-- `agent/sanitization.py` — input sanitization
-- `agent/kore/config.py` — parameter objects (Fowler Step 0)
-- `agent/kore/provider_headers.py` — provider header construction
-- `agent/kore/think_blocks.py` — think-tag handling
-- `agent/kore/glm_heuristic.py` — GLM stop heuristic
+- `agent/sanitization.py` -- input sanitization
+- `agent/kore/config.py` -- parameter objects (Fowler Step 0)
+- `agent/kore/provider_headers.py` -- provider header construction
+- `agent/kore/think_blocks.py` -- think-tag handling + emoji/Unicode ending detection
+- `agent/kore/glm_heuristic.py` -- GLM stop heuristic with config opt-out + 500-char safety gate
 
-All Kore extractions preserve backward compatibility — no behavioral changes.
+### Upstream features now included
+
+Via rebase onto upstream main (38 commits absorbed):
+
+- One-shot mode (`hermes -z`, `--model`/`--provider` flags)
+- Cron `context_from` field for job output chaining
+- Compression: reserve system+tools headroom, pass provider to length resolver
+- Auxiliary: retry without temperature, generalized unsupported-parameter detector
+- Dashboard page-scoped plugin slots
+- `/stop` immediately aborts streaming retry loop
+- Terminal watch_patterns notification spam defense
++ various Discord, Feishu, and TUI fixes
 
 ## Branch structure
 
@@ -45,7 +59,6 @@ All Kore extractions preserve backward compatibility — no behavioral changes.
 |--------|---------|
 | `main` | Tracks `NousResearch/hermes-agent/main` exactly. No local commits. |
 | `dogfood` | Production branch. All tested patches on top of `main`. |
-| `kore/refactoring` | Module extractions from `run_agent.py`. Proposed as upstream PRs independently. |
 
 ## Install
 
@@ -69,10 +82,6 @@ git checkout dogfood
 
 I rebase `dogfood` onto upstream `main` regularly (at least weekly). If upstream merges one of our patches, I drop it from the branch in the next rebase.
 
-## Contributing upstream
-
-Bug fixes and features that land on `dogfood` are also submitted as PRs to [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent). If they merge, great — the patch drops from this fork. If they don't, users of this fork still get the fix.
-
 ## License
 
-MIT — same as upstream. Copyright notice preserved.
+MIT -- same as upstream. Copyright notice preserved.
