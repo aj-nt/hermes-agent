@@ -2427,14 +2427,13 @@ class AIAgent:
 
 
     def _is_ollama_glm_backend(self) -> bool:
-        """Detect the narrow backend family affected by Ollama/GLM stop misreports."""
-        model_lower = (self.model or "").lower()
-        provider_lower = (self.provider or "").lower()
-        if "glm" not in model_lower and provider_lower != "zai":
-            return False
-        if "ollama" in self._base_url_lower or ":11434" in self._base_url_lower:
-            return True
-        return bool(self.base_url and is_local_endpoint(self.base_url))
+        from agent.kore.glm_heuristic import is_ollama_glm_backend
+        from agent.kore.config import ProviderConfig
+        return is_ollama_glm_backend(ProviderConfig(
+            model=getattr(self, "model", None),
+            provider=getattr(self, "provider", None),
+            base_url=getattr(self, "base_url", None),
+        ))
 
     def _should_treat_stop_as_truncated(
         self,
@@ -2442,60 +2441,22 @@ class AIAgent:
         assistant_message,
         messages: Optional[list] = None,
     ) -> bool:
-        """Detect conservative stop->length misreports for Ollama-hosted GLM models.
+        from agent.kore.glm_heuristic import should_treat_stop_as_truncated
+        from agent.kore.config import ProviderConfig
+        return should_treat_stop_as_truncated(
+            ProviderConfig(
+                model=getattr(self, "model", None),
+                provider=getattr(self, "provider", None),
+                base_url=getattr(self, "base_url", None),
+                api_mode=getattr(self, "api_mode", None),
+            ),
+            finish_reason,
+            assistant_message,
+            messages,
+        ),
+            heuristic_enabled=getattr(self, "_glm_truncation_heuristic_enabled", True),
+        )
 
-        The Ollama/GLM backend sometimes reports finish_reason='stop' on
-        responses that were actually truncated by the max_tokens limit.
-        This heuristic detects such cases by looking for responses that
-        appear to end mid-sentence (no natural ending punctuation or emoji).
-
-        Guard rails (to avoid false positives, cf. #14572):
-          - Config flag agent.glm_truncation_heuristic (default True) disables the
-            heuristic entirely when set to False.
-          - Short responses (<500 chars with whitespace) are almost certainly
-            complete — a truly truncated response would be long enough to hit
-            the token limit.
-          - Only applies after tool-use turns (Ollama/GLM is known to
-            misreport stop-after-tool continuations).
-          - Responses ending with emoji or other Unicode sign-off glyphs are
-            treated as naturally complete (see _has_natural_response_ending).
-        """
-        # Config opt-out: if the user has disabled the heuristic, never trigger.
-        if not getattr(self, "_glm_truncation_heuristic_enabled", True):
-            return False
-
-        if finish_reason != "stop" or self.api_mode != "chat_completions":
-            return False
-        if not self._is_ollama_glm_backend():
-            return False
-        if not any(
-            isinstance(msg, dict) and msg.get("role") == "tool"
-            for msg in (messages or [])
-        ):
-            return False
-        if assistant_message is None or getattr(assistant_message, "tool_calls", None):
-            return False
-
-        content = getattr(assistant_message, "content", None)
-        if not isinstance(content, str):
-            return False
-
-        visible_text = self._strip_think_blocks(content).strip()
-        if not visible_text:
-            return False
-        # Very short responses with spaces are almost certainly complete —
-        # they couldn't have hit a meaningful token limit.
-        if len(visible_text) < 20 or not re.search(r"\s", visible_text):
-            return False
-        # Short-to-medium responses (<500 chars) are very unlikely to be
-        # truncated.  Raising this gate from 20 to 500 eliminates the vast
-        # majority of false positives from conversational replies that simply
-        # lack terminal punctuation.  (See #14572 for the original bug where
-        # emoji sign-offs triggered continuation loops on every turn.)
-        if len(visible_text) < 500:
-            return False
-
-        return not self._has_natural_response_ending(visible_text)
 
     def _looks_like_codex_intermediate_ack(
         self,
