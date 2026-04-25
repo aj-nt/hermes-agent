@@ -17,6 +17,17 @@ from agent.codex_responses_adapter import (
     _split_responses_tool_id as _codex_split_responses_tool_id,
 )
 
+
+
+# ── Constants (moved from AIAgent class) ─────────────────────────────────
+
+VALID_API_ROLES = frozenset({"system", "user", "assistant", "tool", "function", "developer"})
+
+TOOL_CALL_ARGUMENTS_CORRUPTION_MARKER = (
+    "[hermes-agent: tool call arguments were corrupted in this session and "
+    "have been dropped to keep the conversation alive. See issue #15236.]"
+)
+
 logger = logging.getLogger(__name__)
 
 def get_tool_call_id_static(tc) -> str:
@@ -37,7 +48,7 @@ def sanitize_api_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
     filtered = []
     for msg in messages:
         role = msg.get("role")
-        if role not in AIAgent._VALID_API_ROLES:
+        if role not in VALID_API_ROLES:
             logger.debug(
                 "Pre-call sanitizer: dropping message with invalid role %r",
                 role,
@@ -50,7 +61,7 @@ def sanitize_api_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
     for msg in messages:
         if msg.get("role") == "assistant":
             for tc in msg.get("tool_calls") or []:
-                cid = AIAgent._get_tool_call_id_static(tc)
+                cid = get_tool_call_id_static(tc)
                 if cid:
                     surviving_call_ids.add(cid)
 
@@ -81,7 +92,7 @@ def sanitize_api_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
             patched.append(msg)
             if msg.get("role") == "assistant":
                 for tc in msg.get("tool_calls") or []:
-                    cid = AIAgent._get_tool_call_id_static(tc)
+                    cid = get_tool_call_id_static(tc)
                     if cid in missing_results:
                         patched.append({
                             "role": "tool",
@@ -152,12 +163,12 @@ def deterministic_call_id(fn_name: str, arguments: str, index: int = 0) -> str:
     Deterministic IDs prevent cache invalidation — random UUIDs would
     make every API call's prefix unique, breaking OpenAI's prompt cache.
     """
-    return _codexdeterministic_call_id(fn_name, arguments, index)
+    return _codex_deterministic_call_id(fn_name, arguments, index)
 
 
 def split_responses_tool_id(raw_id: Any) -> tuple[Optional[str], Optional[str]]:
     """Split a stored tool id into (call_id, response_item_id)."""
-    return _codexsplit_responses_tool_id(raw_id)
+    return _codex_split_responses_tool_id(raw_id)
 
 
 def sanitize_tool_calls_for_strict_api(api_msg: dict) -> dict:
@@ -200,7 +211,7 @@ def sanitize_tool_call_arguments(
         return 0
 
     repaired = 0
-    marker = AIAgent._TOOL_CALL_ARGUMENTS_CORRUPTION_MARKER
+    marker = TOOL_CALL_ARGUMENTS_CORRUPTION_MARKER
 
     def _prepend_marker(tool_msg: dict) -> None:
         existing = tool_msg.get("content")
