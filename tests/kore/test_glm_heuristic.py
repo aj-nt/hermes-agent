@@ -95,7 +95,8 @@ class TestShouldTreatStopAsTruncated:
 
     def test_with_tool_messages_truncated_response(self):
         config = _make_config()
-        content = "This is a truncated response that keeps going without"
+        # Must be >500 chars to pass the minimum-length gate
+        content = "Based on the search results, I found several relevant findings that connect to your query about the configuration parameters and their adjustments, specifically the timeout value should be increased from 30 to 120 seconds, and the retry count should be set to 5 rather than 3. Additionally, the endpoint URL needs to be updated to reflect the new server location which is now at https://api dot v2 dot example dot com instead of the previous one but the response was cut"
         msg = type("Msg", (), {"content": content, "tool_calls": None})()
         messages = [{"role": "tool", "content": "result"}]
         # No natural ending + tool messages + GLM backend = truncated
@@ -145,7 +146,8 @@ class TestShouldTreatStopAsTruncated:
     def test_long_response_without_ending_triggers(self):
         """Long responses (>500 chars) without natural ending are truncated."""
         config = _make_config()
-        content = "x" * 600  # Long + no natural ending
+        # Must be >500 chars AND contain whitespace to pass both gates
+        content = " ".join(["truncated"] * 150)  # ~1350 chars, no period/ending
         msg = type("Msg", (), {"content": content, "tool_calls": None})()
         messages = [{"role": "tool", "content": "result"}]
         assert should_treat_stop_as_truncated(config, "stop", msg, messages) is True
