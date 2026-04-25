@@ -2453,7 +2453,6 @@ class AIAgent:
             finish_reason,
             assistant_message,
             messages,
-        ),
             heuristic_enabled=getattr(self, "_glm_truncation_heuristic_enabled", True),
         )
 

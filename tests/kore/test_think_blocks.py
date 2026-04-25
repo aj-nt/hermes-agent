@@ -100,6 +100,56 @@ class TestHasNaturalResponseEnding:
         assert has_natural_response_ending("Hello.  ") is True
 
 
+    @pytest.mark.parametrize("emoji", [
+        "\U0001f49b",  # yellow heart
+        "\u2728",       # sparkles
+        "\U0001f64c",  # raised hands
+        "\U0001f919",  # call me hand
+        "\U0001f525",  # fire
+        "\U0001f4aa",  # flexed bicep
+        "\U0001f680",  # rocket
+        "\U0001f60e",  # sunglasses
+        "\U0001f60a",  # smiling face
+        "\U0001f44b",  # waving hand
+        "\u2764\ufe0f", # red heart
+        "\U0001f64f",  # folded hands
+        "\U0001f44d",  # thumbs up
+        "\U0001f4af",  # 100
+        "\U0001f389",  # party popper
+        "\U0001fae1",  # salute
+    ])
+    def test_emoji_are_natural_endings(self, emoji):
+        """Emoji at end of response should count as natural ending (#14572)."""
+        assert has_natural_response_ending(
+            f"Here's your answer. Let me know if you need more {emoji}"
+        ) is True
+
+    @pytest.mark.parametrize("symbol", [
+        "\u2192",  # arrow right (Sm)
+        "\u2190",  # arrow left (Sm)
+        "\u2794",  # broad arrow (So)
+        "\u221e",  # infinity (Sm)
+        "\u2248",  # approximately equal (Sm)
+        "\u2713",  # check mark (So)
+        "\u2764",  # heavy black heart (So)
+        "\u2605",  # black star (So)
+    ])
+    def test_math_symbols_and_sign_off_glyphs_are_natural(self, symbol):
+        """Math symbols (Sm) and sign-off glyphs (So) are natural endings."""
+        assert has_natural_response_ending(
+            f"Here's the result {symbol}"
+        ) is True
+
+    def test_variation_selector_emoji_is_natural(self):
+        """Heart with variation selector (VS16) should be natural."""
+        # Red heart with VS16: e with variation selector
+        assert has_natural_response_ending("Love this! \u2764\ufe0f") is True
+
+    def test_triple_backtick_fence_ending(self):
+        """Triple backtick fence is a natural ending for code blocks."""
+        assert has_natural_response_ending("code()\n```") is True
+
+
 class TestHasContentAfterThinkBlock:
     """Tests for has_content_after_think_block()."""
 

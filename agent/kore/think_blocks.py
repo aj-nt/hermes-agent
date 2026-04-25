@@ -129,10 +129,16 @@ def strip_think_blocks(content: str) -> str:
 def has_natural_response_ending(content: str) -> bool:
     """Heuristic: does visible assistant text look intentionally finished?
 
-    Returns True if the content ends with a sentence-final character
-    (period, question mark, exclamation, closing bracket, CJK period, etc.)
-    or a closing triple-backtick fence.
+    Recognises ASCII/CJK punctuation, emoji, and other common sign-off
+    glyphs as natural endings.  Returns True for characters that are
+    unlikely to appear mid-sentence in a truncated response.
+
+    Extended in #14572 to cover emoji sign-offs (e.g. hearts, sparkles,
+    raised hands) which were previously false-positive triggers for the
+    Ollama/GLM stop-to-length heuristic.
     """
+    import unicodedata
+
     if not content:
         return False
     stripped = content.rstrip()
@@ -140,7 +146,38 @@ def has_natural_response_ending(content: str) -> bool:
         return False
     if stripped.endswith("```"):
         return True
-    return stripped[-1] in _NATURAL_ENDINGS
+
+    # Strip trailing variation selectors (U+FE0F) and zero-width joiners
+    # (U+200D) that emoji sequences use, so we check the "real" base glyph.
+    i = len(stripped) - 1
+    while i >= 0 and unicodedata.category(stripped[i]) in ("Mn", "Me", "Cf"):
+        i -= 1
+    if i < 0:
+        return False
+    last_char = stripped[i]
+
+    # ASCII and CJK punctuation that signal a complete thought.
+    if last_char in _NATURAL_ENDINGS:
+        return True
+
+    # Emoji and other Unicode sign-off glyphs.
+    # We use unicodedata categories rather than a hard-coded codepoint
+    # list so we automatically cover new emoji as Python's Unicode
+    # database grows.
+    cat = unicodedata.category(last_char)
+    # So (Other_Symbol) covers sparkle, muscle, rocket, check, cross, warning etc.
+    # Sk (Modifier_Symbol) covers VS16 (heart variation selector, etc.)
+    # Sm (Math_Symbol) covers arrows and similar sign-off glyphs.
+    if cat in ("So", "Sk", "Sm"):
+        return True
+    # Emoji_Presentation property: many emoji are General_Category=So
+    # but some are in Lo/Lm/Other.  Check the wide "Extended_Pictographic"
+    # property via the Emoji character range heuristic (U+1F000..U+1FAFF).
+    cp = ord(last_char)
+    if 0x1F000 <= cp <= 0x1FAFF:
+        return True
+
+    return False
 
 
 def has_content_after_think_block(content: str) -> bool:
