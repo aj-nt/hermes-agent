@@ -10,6 +10,7 @@ import codecs
 import json
 import logging
 import os
+import re
 import select
 import shlex
 import subprocess
@@ -647,15 +648,22 @@ class BaseEnvironment(ABC):
     # State-sync leak stripping (defense-in-depth for bug #15459)
     # ------------------------------------------------------------------
 
-    # Patterns that indicate a leaked env/alias/function line.  These are
-    # only stripped when they appear at column 0 (start of line) so that
-    # legitimate command output mentioning "declare" or "export" mid-line
-    # is preserved.
-    _STATE_SYNC_LEAK_PATTERNS: tuple[str, ...] = (
-        "declare -x ",   # bash env var with value
-        "declare -f ",   # bash function definition
-        "export ",        # POSIX/zsh env var export
-        "alias ",         # alias -p output
+    # Regex matching lines that indicate a leaked env/alias/function dump.
+    # When ``export -p > file`` fails, the full shell environment leaks
+    # into stdout.  We strip these lines from command output.
+    #
+    # Matched patterns (all anchored to column 0):
+    #   declare -x ...       bash env var (with or without =value)
+    #   declare -f ...       bash function definition
+    #   export VARNAME=...   POSIX/zsh env var export (requires = to
+    #                        avoid stripping "export" as English word)
+    #   alias NAME=...       bash alias -p output (requires = or '
+    #                        to avoid stripping English "alias N ...")
+    #
+    # Column-0 anchoring preserves legitimate output where these words
+    # appear mid-line (e.g., "The variable is declare -x formatted").
+    _STATE_SYNC_LEAK_RE = re.compile(
+        r"^(declare -x \S|declare -f \S|export [A-Za-z_]\w*=|alias [A-Za-z_]\w*[=\x27])"
     )
 
     @classmethod
@@ -678,7 +686,7 @@ class BaseEnvironment(ABC):
         lines = output.split("\n")
         stripped = [
             line for line in lines
-            if not any(line.startswith(p) for p in cls._STATE_SYNC_LEAK_PATTERNS)
+            if not cls._STATE_SYNC_LEAK_RE.match(line)
         ]
         result["output"] = "\n".join(stripped)
 

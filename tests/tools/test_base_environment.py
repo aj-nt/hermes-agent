@@ -341,6 +341,36 @@ class TestStripStateSyncLeak:
         # Aliases are stripped
         assert result["output"] == "real command output\n"
 
+    def test_preserves_english_alias(self):
+        """English sentences starting with 'alias ' (no =) are preserved.
+
+        Regression: original 'alias ' prefix was too broad — it stripped
+        'alias rm to remove files' which is legitimate output, not a shell
+        alias.  The regex now requires '=' or "'" after the name.
+        """
+        env = _TestableEnv()
+        result = {"output": "alias rm to remove files\n"}
+        env._strip_state_sync_leak(result)
+        assert result["output"] == "alias rm to remove files\n"
+
+    def test_preserves_bare_export(self):
+        """Bare 'export' command (no VAR=) at column 0 is preserved.
+
+        Without the = requirement, 'export' alone would be stripped.
+        The regex requires 'export NAME=' to avoid false positives.
+        """
+        env = _TestableEnv()
+        result = {"output": "export\n"}
+        env._strip_state_sync_leak(result)
+        assert result["output"] == "export\n"
+
+    def test_strips_export_with_equals(self):
+        """'export PATH=/usr/bin' is stripped (has = sign after name)."""
+        env = _TestableEnv()
+        result = {"output": "export PATH=/usr/bin\n"}
+        env._strip_state_sync_leak(result)
+        assert result["output"] == ""
+
     def test_preserves_echo_with_declare_in_it(self):
         """A real command output like 'declare -x' in a string is preserved
         if it doesn't start at column zero."""
