@@ -438,15 +438,47 @@ class TestMigrationFromFiles:
         rows = store._query("SELECT * FROM memories WHERE target = 'memory'")
         assert len(rows) >= 1
 
-    def test_migrate_empty_table_skips(self, store, tmp_path):
-        """If table already has entries, don't re-migrate."""
-        store.add("memory", "Existing entry", category="environment", key="existing")
-        store._migrated = False  # Reset flag
+    def test_migrate_partial_table_fills_gaps(self, store, tmp_path):
+        """Migration with a partially-populated table should fill in missing entries.
         
-        # Should skip migration since table has entries
-        store._migrate_from_files()
-        rows = store._query("SELECT * FROM memories")
-        assert len(rows) == 1  # Only the existing entry
+        INSERT OR IGNORE means existing rows are skipped (by unique key), 
+        new rows are inserted. This is the fix for the bug where migration 
+        bailed out if any rows existed, leaving flat-file entries un-migrated.
+        """
+        # Pre-add one entry with the same key the classifier would generate
+        # Simulates a partially-migrated table (some entries already in SQLite)
+        existing_content = "QMM runs Ollama on port 11434"
+        existing_key = _classify_entry(existing_content)[0]
+        store.add("memory", existing_content, category="environment", key=existing_key)
+        
+        # At this point we have 1 row in SQLite, but flat files have 2 entries
+        mem_dir = tmp_path / "memories"
+        mem_dir.mkdir()
+        (mem_dir / "MEMORY.md").write_text(
+            f"{existing_content}\n"
+            f"§\n"
+            "Entirely new entry that should be migrated\n"
+        )
+        (mem_dir / "USER.md").write_text("A user fact to migrate")
+        
+        store._migrated = False
+        
+        # Monkey-patch get_memory_dir like load_from_disk does
+        import tools.memory_tool as mt
+        original_get = mt.get_memory_dir
+        mt.get_memory_dir = lambda: mem_dir
+        try:
+            store._migrate_from_files()
+        finally:
+            mt.get_memory_dir = original_get
+        
+        # Should have: 1 pre-existing (kept, not duplicated) + 2 new = 3 total
+        rows = store._query("SELECT * FROM memories ORDER BY id")
+        assert len(rows) == 3
+        
+        # The existing key should appear exactly once — no duplicate from flat file
+        existing_rows = store._query(f"SELECT * FROM memories WHERE key='{existing_key}'")
+        assert len(existing_rows) == 1
 
 
 # ---------------------------------------------------------------------------

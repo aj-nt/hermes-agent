@@ -292,22 +292,19 @@ class MemoryStore:
     # -- Migration from flat files --
     
     def _migrate_from_files(self):
-        """One-time migration from MEMORY.md/USER.md to SQLite memories table.
+        """Migrate entries from MEMORY.md/USER.md to SQLite memories table.
         
-        Only runs if the memories table is empty and flat files exist.
-        Uses heuristic classification to assign categories and keys.
+        Uses INSERT OR IGNORE so partially-migrated tables are handled correctly —
+        existing rows (by unique key) are skipped, not duplicated.
+        Safe to call multiple times (idempotent).
         """
         if self._migrated:
             return
         
-        # Check if table has any entries already
+        # If the table doesn't exist yet (pre-v10 DB), skip silently
         try:
-            count = self._query_one("SELECT COUNT(*) as cnt FROM memories")
-            if count and count[0] > 0:
-                self._migrated = True
-                return
+            self._query_one("SELECT id FROM memories LIMIT 1")
         except Exception:
-            # Table might not exist yet (pre-v10 DB)
             self._migrated = True
             return
         
