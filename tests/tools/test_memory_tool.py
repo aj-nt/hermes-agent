@@ -309,6 +309,34 @@ class TestMemoryStoreSearch:
         rows = store._query("SELECT access_count FROM memories WHERE key = ?", ("access_test",))
         assert rows[0][0] > initial_count
 
+    def test_search_with_colon_in_query_does_not_trigger_fts5_column_error(self, store):
+        """FTS5 interprets 'word:...' as a column filter. Since our FTS table
+        only has the 'content' column, queries like 'layer:4' or 'agent:primary'
+        raise 'no such column: layer' / 'no such column: agent'.
+        The search method must sanitize these queries so they don't crash,
+        and fall back to LIKE matching when FTS5 phrase match returns nothing."""
+        store.add("memory", "Memory system has a Layer 4 probe for recent context", category="environment", key="layer4")
+        store.add("memory", "Agent context is set to primary by default", category="environment", key="agent_ctx")
+
+        # These should NOT raise "no such column" errors.
+        # Exact FTS5 phrase match won't find "layer:4" in "Layer 4", so
+        # LIKE fallback should kick in and still return the matching entry.
+        result = store.search("layer:4")
+        assert result["success"] is True
+        assert result["count"] >= 1
+
+        result = store.search("agent:primary")
+        assert result["success"] is True
+
+    def test_search_with_url_does_not_trigger_fts5_error(self, store):
+        """URLs like http://localhost:11434 contain colons that FTS5
+        misinterprets as column filters."""
+        store.add("memory", "Ollama runs at http://localhost:11434", category="environment", key="ollama_url")
+
+        result = store.search("http://localhost:11434")
+        assert result["success"] is True
+        assert result["count"] >= 1
+
 
 # ---------------------------------------------------------------------------
 # Consolidation

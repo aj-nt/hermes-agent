@@ -733,6 +733,12 @@ class MemoryStore:
         """
         try:
             # Use FTS5 for content search
+            # Sanitize query: FTS5 interprets 'word:...' as column filters.
+            # Since our FTS table only has the 'content' column, any colonated
+            # term (layer:4, agent:primary, http://...) triggers "no such column".
+            # Wrapping in double quotes forces FTS5 phrase-match mode.
+            # Escape any existing double quotes in the query first.
+            safe_query = '"' + query.replace('"', '""') + '"'
             sql = """
                 SELECT m.id, m.target, m.category, m.key, m.content, m.priority,
                        m.created_at, m.updated_at, m.last_accessed, m.access_count
@@ -740,7 +746,7 @@ class MemoryStore:
                 JOIN memories_fts fts ON m.id = fts.rowid
                 WHERE memories_fts MATCH ?
             """
-            params: list = [query]
+            params: list = [safe_query]
             
             if target:
                 sql += " AND m.target = ?"
@@ -766,6 +772,38 @@ class MemoryStore:
                     "last_accessed": r[8],
                     "access_count": r[9],
                 })
+            
+            # FTS5 phrase matching is exact — "layer:4" won't match "Layer 4".
+            # If FTS5 returns nothing, fall back to LIKE for partial matching.
+            if not results and query:
+                like_sql = """
+                    SELECT id, target, category, key, content, priority,
+                           created_at, updated_at, last_accessed, access_count
+                    FROM memories
+                    WHERE content LIKE ?
+                """
+                like_params: list = [f"%{query}%"]
+                if target:
+                    like_sql += " AND target = ?"
+                    like_params.append(target)
+                if category:
+                    like_sql += " AND category = ?"
+                    like_params.append(category)
+                like_sql += " ORDER BY priority DESC, last_accessed DESC LIMIT ?"
+                like_params.append(limit)
+                
+                like_rows = self._query(like_sql, tuple(like_params))
+                for r in like_rows:
+                    results.append({
+                        "id": r[0],
+                        "target": r[1],
+                        "category": r[2],
+                        "key": r[3],
+                        "content": r[4],
+                        "priority": r[5],
+                        "last_accessed": r[8],
+                        "access_count": r[9],
+                    })
             
             # Touch access counts for returned entries
             if results:
