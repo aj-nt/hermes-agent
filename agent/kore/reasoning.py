@@ -182,6 +182,18 @@ def copy_reasoning_content_for_api(
         or needs_deepseek_tool_reasoning(provider, base_url, model)
     ):
         api_msg["reasoning_content"] = ""
+        return
+
+    # DeepSeek / Kimi thinking mode: all assistant messages need
+    # reasoning_content.  Inject "" to satisfy the provider's requirement
+    # when no explicit reasoning content is present.
+    if needs_kimi_tool_reasoning(provider, base_url) or needs_deepseek_tool_reasoning(provider, base_url, model):
+        api_msg["reasoning_content"] = ""
+        return
+
+    # reasoning_content was present but not a string (e.g. None after
+    # context compaction).  Don't pass null to the API.
+    api_msg.pop("reasoning_content", None)
 
 
 def extract_reasoning(assistant_message) -> Optional[str]:

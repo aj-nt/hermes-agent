@@ -83,7 +83,8 @@ CREATE TABLE IF NOT EXISTS messages (
     reasoning TEXT,
     reasoning_content TEXT,
     reasoning_details TEXT,
-    codex_reasoning_items TEXT
+    codex_reasoning_items TEXT,
+    codex_message_items TEXT
 );
 
 CREATE TABLE IF NOT EXISTS state_meta (
@@ -392,6 +393,13 @@ class SessionDB:
                     """)
                 except sqlite3.OperationalError:
                     pass  # Table already exists
+                # v9 (upstream): preserve replayable Codex assistant message
+                # ids/phases so follow-up turns can rebuild Responses API
+                # message items instead of flattening to plain assistant text.
+                try:
+                    cursor.execute('ALTER TABLE messages ADD COLUMN "codex_message_items" TEXT')
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
                 cursor.execute("UPDATE schema_version SET version = 9")
                 needs_reindex = True
             if current_version < 10:
@@ -1092,6 +1100,7 @@ class SessionDB:
         reasoning_content: str = None,
         reasoning_details: Any = None,
         codex_reasoning_items: Any = None,
+        codex_message_items: Any = None,
     ) -> int:
         """
         Append a message to a session. Returns the message row ID.
@@ -1108,6 +1117,10 @@ class SessionDB:
             json.dumps(codex_reasoning_items)
             if codex_reasoning_items else None
         )
+        codex_message_items_json = (
+            json.dumps(codex_message_items)
+            if codex_message_items else None
+        )
         tool_calls_json = json.dumps(tool_calls) if tool_calls else None
 
         # Pre-compute tool call count
@@ -1119,8 +1132,9 @@ class SessionDB:
             cursor = conn.execute(
                 """INSERT INTO messages (session_id, role, content, tool_call_id,
                    tool_calls, tool_name, timestamp, token_count, finish_reason,
-                   reasoning, reasoning_content, reasoning_details, codex_reasoning_items)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   reasoning, reasoning_content, reasoning_details, codex_reasoning_items,
+                   codex_message_items)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -1135,6 +1149,7 @@ class SessionDB:
                     reasoning_content,
                     reasoning_details_json,
                     codex_items_json,
+                    codex_message_items_json,
                 ),
             )
             msg_id = cursor.lastrowid
@@ -1266,7 +1281,8 @@ class SessionDB:
         with self._lock:
             cursor = self._conn.execute(
                 "SELECT role, content, tool_call_id, tool_calls, tool_name, "
-                "reasoning, reasoning_content, reasoning_details, codex_reasoning_items "
+                "reasoning, reasoning_content, reasoning_details, codex_reasoning_items, "
+                "codex_message_items "
                 "FROM messages WHERE session_id = ? ORDER BY timestamp, id",
                 (session_id,),
             )
@@ -1304,6 +1320,12 @@ class SessionDB:
                     except (json.JSONDecodeError, TypeError):
                         logger.warning("Failed to deserialize codex_reasoning_items, falling back to None")
                         msg["codex_reasoning_items"] = None
+                if row["codex_message_items"]:
+                    try:
+                        msg["codex_message_items"] = json.loads(row["codex_message_items"])
+                    except (json.JSONDecodeError, TypeError):
+                        logger.warning("Failed to deserialize codex_message_items, falling back to None")
+                        msg["codex_message_items"] = None
             messages.append(msg)
         return messages
 

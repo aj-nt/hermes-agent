@@ -60,6 +60,7 @@ from agent.kore.reasoning import (
 
 from agent.kore.url_helpers import (
     is_direct_openai_url,
+    is_azure_openai_url,
     is_openrouter_url,
     is_qwen_portal,
     max_tokens_param,
