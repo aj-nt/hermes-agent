@@ -199,3 +199,91 @@ def has_content_after_think_block(content: str) -> bool:
     cleaned = strip_think_blocks(content)
     # Check if there's any non-whitespace content remaining
     return bool(cleaned.strip())
+
+
+
+def looks_like_codex_intermediate_ack(
+    user_message: str,
+    assistant_content: str,
+    messages: list,
+) -> bool:
+    """Detect a planning/ack message that should continue instead of ending the turn.
+
+    When an assistant produces a short message expressing intent to act
+    (e.g. "I'll look into the codebase and report back"), this is likely
+    a Codex-style intermediate acknowledgement that should trigger another
+    tool-call turn rather than ending the conversation.
+
+    Args:
+        user_message: The user's most recent message.
+        assistant_content: The assistant's raw response content (may include think blocks).
+        messages: The conversation messages so far.
+
+    Returns:
+        True if the assistant message looks like an intermediate ack.
+    """
+    import re
+
+    if any(isinstance(msg, dict) and msg.get("role") == "tool" for msg in messages):
+        return False
+
+    assistant_text = strip_think_blocks(assistant_content or "").strip().lower()
+    if not assistant_text:
+        return False
+    if len(assistant_text) > 1200:
+        return False
+
+    has_future_ack = bool(
+        re.search(r"\b(i['\u2019]ll|i will|let me|i can do that|i can help with that)\b", assistant_text)
+    )
+    if not has_future_ack:
+        return False
+
+    action_markers = (
+        "look into",
+        "look at",
+        "inspect",
+        "scan",
+        "check",
+        "analyz",
+        "review",
+        "explore",
+        "read",
+        "open",
+        "run",
+        "test",
+        "fix",
+        "debug",
+        "search",
+        "find",
+        "walkthrough",
+        "report back",
+        "summarize",
+    )
+    workspace_markers = (
+        "directory",
+        "current directory",
+        "current dir",
+        "cwd",
+        "repo",
+        "repository",
+        "codebase",
+        "project",
+        "folder",
+        "filesystem",
+        "file tree",
+        "files",
+        "path",
+    )
+
+    user_text = (user_message or "").strip().lower()
+    user_targets_workspace = (
+        any(marker in user_text for marker in workspace_markers)
+        or "~/" in user_text
+        or "/" in user_text
+    )
+    assistant_mentions_action = any(marker in assistant_text for marker in action_markers)
+    assistant_targets_workspace = any(
+        marker in assistant_text for marker in workspace_markers
+    )
+    return (user_targets_workspace or assistant_targets_workspace) and assistant_mentions_action

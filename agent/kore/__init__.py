@@ -64,6 +64,12 @@ from agent.kore.url_helpers import (
     is_openrouter_url,
     is_qwen_portal,
     max_tokens_param,
+    anthropic_preserve_dots,
+    should_sanitize_tool_calls,
+)
+
+from agent.kore.think_blocks import (
+    looks_like_codex_intermediate_ack,
 )
 
 from agent.kore.message_prep import (
