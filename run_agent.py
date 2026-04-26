@@ -130,6 +130,8 @@ from agent.display import (
 from agent.trajectory import (
     convert_scratchpad_to_think, has_incomplete_scratchpad,
     save_trajectory as _save_trajectory_to_file,
+    format_tools_for_trajectory as _kore_format_tools_for_trajectory,
+    convert_to_trajectory_format as _kore_convert_to_trajectory_format,
 )
 from utils import atomic_json_write, base_url_host_matches, base_url_hostname, env_var_enabled, normalize_proxy_url
 
@@ -431,6 +433,7 @@ from agent.kore.tool_calls import (
     split_responses_tool_id as _kore_split_responses_tool_id,
     sanitize_tool_calls_for_strict_api as _kore_sanitize_tool_calls_for_strict_api,
     sanitize_tool_call_arguments as _kore_sanitize_tool_call_arguments,
+    repair_tool_call as _kore_repair_tool_call,
     VALID_API_ROLES as _KORE_VALID_API_ROLES,
     TOOL_CALL_ARGUMENTS_CORRUPTION_MARKER as _KORE_TOOL_CALL_ARGUMENTS_CORRUPTION_MARKER,
 )
@@ -440,6 +443,7 @@ from agent.kore.responses_api import (
 )
 from agent.kore.think_blocks import has_natural_response_ending
 from agent.kore.tdd_gate import TddGateTracker as _TddGateTracker, is_tdd_gated_path as _is_tdd_gated_path
+from agent.kore.steer import apply_steer_to_tool_results as _kore_apply_steer
 
 from agent.kore.reasoning import (
     resolved_api_call_stale_timeout_base as _kore_resolved_api_call_stale_timeout_base,
@@ -459,6 +463,7 @@ from agent.kore.client_lifecycle import (
     is_openai_client_closed as _kore_is_openai_client_closed,
     build_keepalive_http_client as _kore_build_keepalive_http_client,
     force_close_tcp_sockets as _kore_force_close_tcp_sockets,
+    cleanup_dead_connections as _kore_cleanup_dead_connections,
 )
 from agent.kore.display_utils import (
     summarize_background_review_actions as _kore_summarize_background_review_actions,
@@ -471,6 +476,7 @@ from agent.kore.url_helpers import (
     is_openrouter_url as _kore_is_openrouter_url,
     is_qwen_portal as _kore_is_qwen_portal,
     max_tokens_param as _kore_max_tokens_param,
+    anthropic_preserve_dots as _kore_anthropic_preserve_dots,
 )
 
 from agent.kore.message_prep import (
@@ -2906,194 +2912,15 @@ class AIAgent:
         return _kore_get_messages_up_to_last_assistant(messages)
     
     def _format_tools_for_system_message(self) -> str:
-        """
-        Format tool definitions for the system message in the trajectory format.
-        
-        Returns:
-            str: JSON string representation of tool definitions
-        """
-        if not self.tools:
-            return "[]"
-        
-        # Convert tool definitions to the format expected in trajectories
-        formatted_tools = []
-        for tool in self.tools:
-            func = tool["function"]
-            formatted_tool = {
-                "name": func["name"],
-                "description": func.get("description", ""),
-                "parameters": func.get("parameters", {}),
-                "required": None  # Match the format in the example
-            }
-            formatted_tools.append(formatted_tool)
-        
-        return json.dumps(formatted_tools, ensure_ascii=False)
-    
+        """Format tool definitions for the system message in trajectory format."""
+        return _kore_format_tools_for_trajectory(self.tools)
     def _convert_to_trajectory_format(self, messages: List[Dict[str, Any]], user_query: str, completed: bool) -> List[Dict[str, Any]]:
+        """Convert internal message format to trajectory format for saving.
+        
+        Delegates to agent.trajectory.convert_to_trajectory_format.
         """
-        Convert internal message format to trajectory format for saving.
-        
-        Args:
-            messages (List[Dict]): Internal message history
-            user_query (str): Original user query
-            completed (bool): Whether the conversation completed successfully
-            
-        Returns:
-            List[Dict]: Messages in trajectory format
-        """
-        trajectory = []
-        
-        # Add system message with tool definitions
-        system_msg = (
-            "You are a function calling AI model. You are provided with function signatures within <tools> </tools> XML tags. "
-            "You may call one or more functions to assist with the user query. If available tools are not relevant in assisting "
-            "with user query, just respond in natural conversational language. Don't make assumptions about what values to plug "
-            "into functions. After calling & executing the functions, you will be provided with function results within "
-            "<tool_response> </tool_response> XML tags. Here are the available tools:\n"
-            f"<tools>\n{self._format_tools_for_system_message()}\n</tools>\n"
-            "For each function call return a JSON object, with the following pydantic model json schema for each:\n"
-            "{'title': 'FunctionCall', 'type': 'object', 'properties': {'name': {'title': 'Name', 'type': 'string'}, "
-            "'arguments': {'title': 'Arguments', 'type': 'object'}}, 'required': ['name', 'arguments']}\n"
-            "Each function call should be enclosed within <tool_call> </tool_call> XML tags.\n"
-            "Example:\n<tool_call>\n{'name': <function-name>,'arguments': <args-dict>}\n</tool_call>"
-        )
-        
-        trajectory.append({
-            "from": "system",
-            "value": system_msg
-        })
-        
-        # Add the actual user prompt (from the dataset) as the first human message
-        trajectory.append({
-            "from": "human",
-            "value": user_query
-        })
-        
-        # Skip the first message (the user query) since we already added it above.
-        # Prefill messages are injected at API-call time only (not in the messages
-        # list), so no offset adjustment is needed here.
-        i = 1
-        
-        while i < len(messages):
-            msg = messages[i]
-            
-            if msg["role"] == "assistant":
-                # Check if this message has tool calls
-                if "tool_calls" in msg and msg["tool_calls"]:
-                    # Format assistant message with tool calls
-                    # Add <think> tags around reasoning for trajectory storage
-                    content = ""
-                    
-                    # Prepend reasoning in <think> tags if available (native thinking tokens)
-                    if msg.get("reasoning") and msg["reasoning"].strip():
-                        content = f"<think>\n{msg['reasoning']}\n</think>\n"
-                    
-                    if msg.get("content") and msg["content"].strip():
-                        # Convert any <REASONING_SCRATCHPAD> tags to <think> tags
-                        # (used when native thinking is disabled and model reasons via XML)
-                        content += convert_scratchpad_to_think(msg["content"]) + "\n"
-                    
-                    # Add tool calls wrapped in XML tags
-                    for tool_call in msg["tool_calls"]:
-                        if not tool_call or not isinstance(tool_call, dict): continue
-                        # Parse arguments - should always succeed since we validate during conversation
-                        # but keep try-except as safety net
-                        try:
-                            arguments = json.loads(tool_call["function"]["arguments"]) if isinstance(tool_call["function"]["arguments"], str) else tool_call["function"]["arguments"]
-                        except json.JSONDecodeError:
-                            # This shouldn't happen since we validate and retry during conversation,
-                            # but if it does, log warning and use empty dict
-                            logging.warning(f"Unexpected invalid JSON in trajectory conversion: {tool_call['function']['arguments'][:100]}")
-                            arguments = {}
-                        
-                        tool_call_json = {
-                            "name": tool_call["function"]["name"],
-                            "arguments": arguments
-                        }
-                        content += f"<tool_call>\n{json.dumps(tool_call_json, ensure_ascii=False)}\n</tool_call>\n"
-                    
-                    # Ensure every gpt turn has a <think> block (empty if no reasoning)
-                    # so the format is consistent for training data
-                    if "<think>" not in content:
-                        content = "<think>\n</think>\n" + content
-                    
-                    trajectory.append({
-                        "from": "gpt",
-                        "value": content.rstrip()
-                    })
-                    
-                    # Collect all subsequent tool responses
-                    tool_responses = []
-                    j = i + 1
-                    while j < len(messages) and messages[j]["role"] == "tool":
-                        tool_msg = messages[j]
-                        # Format tool response with XML tags
-                        tool_response = "<tool_response>\n"
-                        
-                        # Try to parse tool content as JSON if it looks like JSON
-                        tool_content = tool_msg["content"]
-                        try:
-                            if tool_content.strip().startswith(("{", "[")):
-                                tool_content = json.loads(tool_content)
-                        except (json.JSONDecodeError, AttributeError):
-                            pass  # Keep as string if not valid JSON
-                        
-                        tool_index = len(tool_responses)
-                        tool_name = (
-                            msg["tool_calls"][tool_index]["function"]["name"]
-                            if tool_index < len(msg["tool_calls"])
-                            else "unknown"
-                        )
-                        tool_response += json.dumps({
-                            "tool_call_id": tool_msg.get("tool_call_id", ""),
-                            "name": tool_name,
-                            "content": tool_content
-                        }, ensure_ascii=False)
-                        tool_response += "\n</tool_response>"
-                        tool_responses.append(tool_response)
-                        j += 1
-                    
-                    # Add all tool responses as a single message
-                    if tool_responses:
-                        trajectory.append({
-                            "from": "tool",
-                            "value": "\n".join(tool_responses)
-                        })
-                        i = j - 1  # Skip the tool messages we just processed
-                
-                else:
-                    # Regular assistant message without tool calls
-                    # Add <think> tags around reasoning for trajectory storage
-                    content = ""
-                    
-                    # Prepend reasoning in <think> tags if available (native thinking tokens)
-                    if msg.get("reasoning") and msg["reasoning"].strip():
-                        content = f"<think>\n{msg['reasoning']}\n</think>\n"
-                    
-                    # Convert any <REASONING_SCRATCHPAD> tags to <think> tags
-                    # (used when native thinking is disabled and model reasons via XML)
-                    raw_content = msg["content"] or ""
-                    content += convert_scratchpad_to_think(raw_content)
-                    
-                    # Ensure every gpt turn has a <think> block (empty if no reasoning)
-                    if "<think>" not in content:
-                        content = "<think>\n</think>\n" + content
-                    
-                    trajectory.append({
-                        "from": "gpt",
-                        "value": content.strip()
-                    })
-            
-            elif msg["role"] == "user":
-                trajectory.append({
-                    "from": "human",
-                    "value": msg["content"]
-                })
-            
-            i += 1
-        
-        return trajectory
-    
+        tools_json = _kore_format_tools_for_trajectory(self.tools)
+        return _kore_convert_to_trajectory_format(messages, user_query, completed, tools_json)
     def _save_trajectory(self, messages: List[Dict[str, Any]], user_query: str, completed: bool):
         """
         Save conversation trajectory to JSONL file.
@@ -3106,7 +2933,7 @@ class AIAgent:
         if not self.save_trajectories:
             return
         
-        trajectory = self._convert_to_trajectory_format(messages, user_query, completed)
+        trajectory = _kore_convert_to_trajectory_format(messages, user_query, completed, _kore_format_tools_for_trajectory(self.tools))
         _save_trajectory_to_file(trajectory, self.model, completed)
     
     @staticmethod
@@ -3383,35 +3210,14 @@ class AIAgent:
     def _apply_pending_steer_to_tool_results(self, messages: list, num_tool_msgs: int) -> None:
         """Append any pending /steer text to the last tool result in this turn.
 
-        Called at the end of a tool-call batch, before the next API call.
-        The steer is appended to the last ``role:"tool"`` message's content
-        with a clear marker so the model understands it came from the user
-        and NOT from the tool itself. Role alternation is preserved —
-        nothing new is inserted, we only modify existing content.
-
-        Args:
-            messages: The running messages list.
-            num_tool_msgs: Number of tool results appended in this batch;
-                used to locate the tail slice safely.
+        Delegates to agent.kore.steer.apply_steer_to_tool_results for the
+        core logic; this wrapper drains the steer text and puts it back
+        if the pure function could not apply it (e.g. all tool msgs skipped).
         """
-        if num_tool_msgs <= 0 or not messages:
-            return
         steer_text = self._drain_pending_steer()
-        if not steer_text:
-            return
-        # Find the last tool-role message in the recent tail. Skipping
-        # non-tool messages defends against future code appending
-        # something else at the boundary.
-        target_idx = None
-        for j in range(len(messages) - 1, max(len(messages) - num_tool_msgs - 1, -1), -1):
-            msg = messages[j]
-            if isinstance(msg, dict) and msg.get("role") == "tool":
-                target_idx = j
-                break
-        if target_idx is None:
-            # No tool result in this batch (e.g. all skipped by interrupt);
-            # put the steer back so the caller's fallback path can deliver
-            # it as a normal next-turn user message.
+        applied = _kore_apply_steer(messages, num_tool_msgs, steer_text)
+        if not applied and steer_text:
+            # No tool message in this batch — put the steer back for next turn.
             _lock = getattr(self, "_pending_steer_lock", None)
             if _lock is not None:
                 with _lock:
@@ -3422,26 +3228,6 @@ class AIAgent:
             else:
                 existing = getattr(self, "_pending_steer", None)
                 self._pending_steer = (existing + "\n" + steer_text) if existing else steer_text
-            return
-        marker = f"\n\nUser guidance: {steer_text}"
-        existing_content = messages[target_idx].get("content", "")
-        if not isinstance(existing_content, str):
-            # Anthropic multimodal content blocks — preserve them and append
-            # a text block at the end.
-            try:
-                blocks = list(existing_content) if existing_content else []
-                blocks.append({"type": "text", "text": marker.lstrip()})
-                messages[target_idx]["content"] = blocks
-            except Exception:
-                # Fall back to string replacement if content shape is unexpected.
-                messages[target_idx]["content"] = f"{existing_content}{marker}"
-        else:
-            messages[target_idx]["content"] = existing_content + marker
-        logger.info(
-            "Delivered /steer to agent after tool batch (%d chars): %s",
-            len(steer_text),
-            steer_text[:120] + ("..." if len(steer_text) > 120 else ""),
-        )
 
     def _touch_activity(self, desc: str) -> None:
         """Update the last-activity timestamp and description (thread-safe)."""
@@ -3970,77 +3756,8 @@ class AIAgent:
         return _kore_deduplicate_tool_calls(tool_calls)
 
     def _repair_tool_call(self, tool_name: str) -> str | None:
-        """Attempt to repair a mismatched tool name before aborting.
-
-        Models sometimes emit variants of a tool name that differ only
-        in casing, separators, or class-like suffixes. Normalize
-        aggressively before falling back to fuzzy match:
-
-        1. Lowercase direct match.
-        2. Lowercase + hyphens/spaces -> underscores.
-        3. CamelCase -> snake_case (TodoTool -> todo_tool).
-        4. Strip trailing ``_tool`` / ``-tool`` / ``tool`` suffix that
-           Claude-style models sometimes tack on (TodoTool_tool ->
-           TodoTool -> Todo -> todo). Applied twice so double-tacked
-           suffixes like ``TodoTool_tool`` reduce all the way.
-        5. Fuzzy match (difflib, cutoff=0.7).
-
-        See #14784 for the original reports (TodoTool_tool, Patch_tool,
-        BrowserClick_tool were all returning "Unknown tool" before).
-
-        Returns the repaired name if found in valid_tool_names, else None.
-        """
-        import re
-        from difflib import get_close_matches
-
-        if not tool_name:
-            return None
-
-        def _norm(s: str) -> str:
-            return s.lower().replace("-", "_").replace(" ", "_")
-
-        def _camel_snake(s: str) -> str:
-            return re.sub(r"(?<!^)(?=[A-Z])", "_", s).lower()
-
-        def _strip_tool_suffix(s: str) -> str | None:
-            lc = s.lower()
-            for suffix in ("_tool", "-tool", "tool"):
-                if lc.endswith(suffix):
-                    return s[: -len(suffix)].rstrip("_-")
-            return None
-
-        # Cheap fast-paths first — these cover the common case.
-        lowered = tool_name.lower()
-        if lowered in self.valid_tool_names:
-            return lowered
-        normalized = _norm(tool_name)
-        if normalized in self.valid_tool_names:
-            return normalized
-
-        # Build the full candidate set for class-like emissions.
-        cands: set[str] = {tool_name, lowered, normalized, _camel_snake(tool_name)}
-        # Strip trailing tool-suffix up to twice — TodoTool_tool needs it.
-        for _ in range(2):
-            extra: set[str] = set()
-            for c in cands:
-                stripped = _strip_tool_suffix(c)
-                if stripped:
-                    extra.add(stripped)
-                    extra.add(_norm(stripped))
-                    extra.add(_camel_snake(stripped))
-            cands |= extra
-
-        for c in cands:
-            if c and c in self.valid_tool_names:
-                return c
-
-        # Fuzzy match as last resort.
-        matches = get_close_matches(lowered, self.valid_tool_names, n=1, cutoff=0.7)
-        if matches:
-            return matches[0]
-
-        return None
-
+        """Attempt to repair a mismatched tool name. Delegates to kore."""
+        return _kore_repair_tool_call(tool_name, self.valid_tool_names)
     def _invalidate_system_prompt(self):
         """
         Invalidate the cached system prompt, forcing a rebuild on the next turn.
@@ -4252,74 +3969,14 @@ class AIAgent:
 
     def _cleanup_dead_connections(self) -> bool:
         """Detect and clean up dead TCP connections on the primary client.
-
-        Inspects the httpx connection pool for sockets in unhealthy states
-        (CLOSE-WAIT, errors).  If any are found, force-closes all sockets
-        and rebuilds the primary client from scratch.
-
-        Returns True if dead connections were found and cleaned up.
+        
+        Delegates to kore.cleanup_dead_connections for the core logic.
+        Returns True if dead connections were found (triggers client rebuild).
         """
-        client = getattr(self, "client", None)
-        if client is None:
-            return False
-        try:
-            http_client = getattr(client, "_client", None)
-            if http_client is None:
-                return False
-            transport = getattr(http_client, "_transport", None)
-            if transport is None:
-                return False
-            pool = getattr(transport, "_pool", None)
-            if pool is None:
-                return False
-            connections = (
-                getattr(pool, "_connections", None)
-                or getattr(pool, "_pool", None)
-                or []
-            )
-            dead_count = 0
-            for conn in list(connections):
-                # Check for connections that are idle but have closed sockets
-                stream = (
-                    getattr(conn, "_network_stream", None)
-                    or getattr(conn, "_stream", None)
-                )
-                if stream is None:
-                    continue
-                sock = getattr(stream, "_sock", None)
-                if sock is None:
-                    sock = getattr(stream, "stream", None)
-                    if sock is not None:
-                        sock = getattr(sock, "_sock", None)
-                if sock is None:
-                    continue
-                # Probe socket health with a non-blocking recv peek
-                import socket as _socket
-                try:
-                    sock.setblocking(False)
-                    data = sock.recv(1, _socket.MSG_PEEK | _socket.MSG_DONTWAIT)
-                    if data == b"":
-                        dead_count += 1
-                except BlockingIOError:
-                    pass  # No data available — socket is healthy
-                except OSError:
-                    dead_count += 1
-                finally:
-                    try:
-                        sock.setblocking(True)
-                    except OSError:
-                        pass
-            if dead_count > 0:
-                logger.warning(
-                    "Found %d dead connection(s) in client pool — rebuilding client",
-                    dead_count,
-                )
-                self._replace_primary_openai_client(reason="dead_connection_cleanup")
-                return True
-        except Exception as exc:
-            logger.debug("Dead connection check error: %s", exc)
+        if _kore_cleanup_dead_connections(self.client):
+            self._replace_primary_openai_client(reason="dead_connection_cleanup")
+            return True
         return False
-
     def _create_request_openai_client(self, *, reason: str) -> Any:
         from unittest.mock import Mock
 
@@ -6433,36 +6090,8 @@ class AIAgent:
         return transformed
 
     def _anthropic_preserve_dots(self) -> bool:
-        """True when using an anthropic-compatible endpoint that preserves dots in model names.
-        Alibaba/DashScope keeps dots (e.g. qwen3.5-plus).
-        MiniMax keeps dots (e.g. MiniMax-M2.7).
-        OpenCode Go/Zen keeps dots for non-Claude models (e.g. minimax-m2.5-free).
-        ZAI/Zhipu keeps dots (e.g. glm-4.7, glm-5.1).
-        AWS Bedrock uses dotted inference-profile IDs
-        (e.g. ``global.anthropic.claude-opus-4-7``,
-        ``us.anthropic.claude-sonnet-4-5-20250929-v1:0``) and rejects
-        the hyphenated form with
-        ``HTTP 400 The provided model identifier is invalid``.
-        Regression for #11976; mirrors the opencode-go fix for #5211
-        (commit f77be22c), which extended this same allowlist."""
-        if (getattr(self, "provider", "") or "").lower() in {
-            "alibaba", "minimax", "minimax-cn",
-            "opencode-go", "opencode-zen",
-            "zai", "bedrock",
-        }:
-            return True
-        base = (getattr(self, "base_url", "") or "").lower()
-        return (
-            "dashscope" in base
-            or "aliyuncs" in base
-            or "minimax" in base
-            or "opencode.ai/zen/" in base
-            or "bigmodel.cn" in base
-            # AWS Bedrock runtime endpoints — defense-in-depth when
-            # ``provider`` is unset but ``base_url`` still names Bedrock.
-            or "bedrock-runtime." in base
-        )
-
+        """True when using an anthropic-compatible endpoint that preserves dots."""
+        return _kore_anthropic_preserve_dots(provider=self.provider, base_url=self.base_url)
     def _is_qwen_portal(self) -> bool:
         return _kore_is_qwen_portal(self._base_url_lower)
 
@@ -6489,7 +6118,7 @@ class AIAgent:
                 max_tokens=ephemeral_out if ephemeral_out is not None else self.max_tokens,
                 reasoning_config=self.reasoning_config,
                 is_oauth=self._is_anthropic_oauth,
-                preserve_dots=self._anthropic_preserve_dots(),
+                preserve_dots=_kore_anthropic_preserve_dots(provider=self.provider, base_url=self.base_url),
                 context_length=ctx_len,
                 base_url=getattr(self, "_anthropic_base_url", None),
                 fast_mode=(self.request_overrides or {}).get("speed") == "fast",
@@ -7973,7 +7602,7 @@ class AIAgent:
                     _ant_kw = _tsum.build_kwargs(model=self.model, messages=api_messages, tools=None,
                                    max_tokens=self.max_tokens, reasoning_config=self.reasoning_config,
                                    is_oauth=self._is_anthropic_oauth,
-                                   preserve_dots=self._anthropic_preserve_dots())
+                                   preserve_dots=_kore_anthropic_preserve_dots(provider=self.provider, base_url=self.base_url))
                     summary_response = self._anthropic_messages_create(_ant_kw)
                     _summary_result = _tsum.normalize_response(summary_response, strip_tool_prefix=self._is_anthropic_oauth)
                     final_response = (_summary_result.content or "").strip()
@@ -8003,7 +7632,7 @@ class AIAgent:
                     _ant_kw2 = _tretry.build_kwargs(model=self.model, messages=api_messages, tools=None,
                                     is_oauth=self._is_anthropic_oauth,
                                     max_tokens=self.max_tokens, reasoning_config=self.reasoning_config,
-                                    preserve_dots=self._anthropic_preserve_dots())
+                                    preserve_dots=_kore_anthropic_preserve_dots(provider=self.provider, base_url=self.base_url))
                     retry_response = self._anthropic_messages_create(_ant_kw2)
                     _retry_result = _tretry.normalize_response(retry_response, strip_tool_prefix=self._is_anthropic_oauth)
                     final_response = (_retry_result.content or "").strip()
@@ -8130,7 +7759,7 @@ class AIAgent:
         # This prevents the next API call from hanging on a zombie socket.
         if self.api_mode != "anthropic_messages":
             try:
-                if self._cleanup_dead_connections():
+                if _kore_cleanup_dead_connections(self.client):
                     self._emit_status(
                         "🔌 Detected stale connections from a previous provider "
                         "issue — cleaned up automatically. Proceeding with fresh "
@@ -10623,7 +10252,7 @@ class AIAgent:
                     # Repair mismatched tool names before validating
                     for tc in assistant_message.tool_calls:
                         if tc.function.name not in self.valid_tool_names:
-                            repaired = self._repair_tool_call(tc.function.name)
+                            repaired = _kore_repair_tool_call(tc.function.name, self.valid_tool_names)
                             if repaired:
                                 print(f"{self.log_prefix}🔧 Auto-repaired tool name: '{tc.function.name}' -> '{repaired}'")
                                 tc.function.name = repaired
@@ -11669,10 +11298,11 @@ def main(
         sample_filename = f"sample_{sample_id}.json"
         
         # Convert messages to trajectory format (same as batch_runner)
-        trajectory = agent._convert_to_trajectory_format(
+        trajectory = _kore_convert_to_trajectory_format(
             result['messages'], 
             user_query, 
-            result['completed']
+            result['completed'],
+            _kore_format_tools_for_trajectory(agent.tools)
         )
         
         entry = {

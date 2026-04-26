@@ -166,3 +166,80 @@ def force_close_tcp_sockets(client: Any) -> int:
     except Exception as exc:
         logger.debug("Force-close TCP sockets sweep error: %s", exc)
     return closed
+
+
+def cleanup_dead_connections(client) -> bool:
+    """Detect and clean up dead TCP connections on the primary client.
+
+    Inspects the httpx connection pool for sockets in unhealthy states
+    (CLOSE-WAIT, errors). If any are found, returns True so the caller
+    can rebuild the primary client from scratch.
+
+    This is the pure-function extraction of AIAgent._cleanup_dead_connections.
+    The caller is responsible for rebuilding the client when True is returned.
+
+    Args:
+        client: An OpenAI client instance (or compatible object with
+            ``_client._transport._pool`` path).
+
+    Returns:
+        True if dead connections were found, False otherwise.
+    """
+    if client is None:
+        return False
+    try:
+        http_client = getattr(client, "_client", None)
+        if http_client is None:
+            return False
+        transport = getattr(http_client, "_transport", None)
+        if transport is None:
+            return False
+        pool = getattr(transport, "_pool", None)
+        if pool is None:
+            return False
+        connections = (
+            getattr(pool, "_connections", None)
+            or getattr(pool, "_pool", None)
+            or []
+        )
+        dead_count = 0
+        for conn in list(connections):
+            # Check for connections that are idle but have closed sockets
+            stream = (
+                getattr(conn, "_network_stream", None)
+                or getattr(conn, "_stream", None)
+            )
+            if stream is None:
+                continue
+            sock = getattr(stream, "_sock", None)
+            if sock is None:
+                sock = getattr(stream, "stream", None)
+                if sock is not None:
+                    sock = getattr(sock, "_sock", None)
+            if sock is None:
+                continue
+            # Probe socket health with a non-blocking recv peek
+            import socket as _socket
+            try:
+                sock.setblocking(False)
+                data = sock.recv(1, _socket.MSG_PEEK | _socket.MSG_DONTWAIT)
+                if data == b"":
+                    dead_count += 1
+            except BlockingIOError:
+                pass  # No data available — socket is healthy
+            except OSError:
+                dead_count += 1
+            finally:
+                try:
+                    sock.setblocking(True)
+                except OSError:
+                    pass
+        if dead_count > 0:
+            logger.warning(
+                "Found %d dead connection(s) in client pool — rebuild needed",
+                dead_count,
+            )
+            return True
+    except Exception as exc:
+        logger.debug("Dead connection check error: %s", exc)
+    return False

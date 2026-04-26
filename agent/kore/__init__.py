@@ -23,6 +23,7 @@ from agent.kore.tool_calls import (
     split_responses_tool_id,
     sanitize_tool_calls_for_strict_api,
     sanitize_tool_call_arguments,
+    repair_tool_call,
     VALID_API_ROLES,
     TOOL_CALL_ARGUMENTS_CORRUPTION_MARKER,
 )
@@ -41,6 +42,7 @@ from agent.kore.client_lifecycle import (
     is_openai_client_closed,
     build_keepalive_http_client,
     force_close_tcp_sockets,
+    cleanup_dead_connections,
 )
 
 from agent.kore.display_utils import (
@@ -87,4 +89,8 @@ from agent.kore.tdd_gate import (
     TddGateTracker,
     is_tdd_gated_path,
     build_nudge,
+)
+
+from agent.kore.steer import (
+    apply_steer_to_tool_results,
 )
