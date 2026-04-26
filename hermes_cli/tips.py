@@ -10,7 +10,8 @@ import random
 
 TIPS = [
     # --- Slash Commands ---
-    "/background <prompt> (alias /bg or /btw) runs a task in a separate session while your current one stays free.",
+    "/btw <question> asks a quick side question without tools or history — great for clarifications.",
+    "/background <prompt> runs a task in a separate session while your current one stays free.",
     "/branch forks the current session so you can explore a different direction without losing progress.",
     "/compress manually compresses conversation context when things get long.",
     "/rollback lists filesystem checkpoints — restore files the agent modified to any prior state.",

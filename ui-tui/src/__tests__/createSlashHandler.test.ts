@@ -363,7 +363,7 @@ const buildComposer = () => ({
   hasSelection: false,
   paste: vi.fn(),
   queueRef: { current: [] as string[] },
-  selection: { copySelection: vi.fn(async () => '') },
+  selection: { copySelection: vi.fn(() => '') },
   setInput: vi.fn()
 })
 

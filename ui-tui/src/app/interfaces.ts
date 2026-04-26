@@ -32,7 +32,7 @@ export type StatusBarMode = 'bottom' | 'off' | 'top'
 
 export interface SelectionApi {
   clearSelection: () => void
-  copySelection: () => Promise<string>
+  copySelection: () => string
 }
 
 export interface CompletionItem {
