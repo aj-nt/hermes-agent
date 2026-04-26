@@ -81,3 +81,10 @@ from agent.kore.reasoning import (
     extract_reasoning,
     get_messages_up_to_last_assistant,
 )
+
+
+from agent.kore.tdd_gate import (
+    TddGateTracker,
+    is_tdd_gated_path,
+    build_nudge,
+)

@@ -439,6 +439,7 @@ from agent.kore.responses_api import (
     provider_model_requires_responses_api as _kore_provider_model_requires_responses_api,
 )
 from agent.kore.think_blocks import has_natural_response_ending
+from agent.kore.tdd_gate import TddGateTracker as _TddGateTracker, is_tdd_gated_path as _is_tdd_gated_path
 
 from agent.kore.reasoning import (
     resolved_api_call_stale_timeout_base as _kore_resolved_api_call_stale_timeout_base,
@@ -1388,6 +1389,8 @@ class AIAgent:
         self._memory_nudge_interval = 10
         self._turns_since_memory = 0
         self._iters_since_skill = 0
+        self._tdd_gate = _TddGateTracker()
+        self._tdd_pending_nudges: list = []
         if not skip_memory:
             try:
                 mem_config = _agent_cfg.get("memory", {})
@@ -7185,6 +7188,17 @@ class AIAgent:
                 except Exception:
                     pass
 
+            # TDD gate: track Python file edits and nudge if looping
+            if function_name in ("write_file", "patch"):
+                try:
+                    _tdd_file_path = function_args.get("path", "")
+                    if _is_tdd_gated_path(_tdd_file_path):
+                        _edit_count, _tdd_nudge = self._tdd_gate.record(_tdd_file_path, tool_call.id)
+                        if _tdd_nudge:
+                            self._tdd_pending_nudges.append(_tdd_nudge)
+                except Exception:
+                    pass
+
             # Checkpoint before destructive terminal commands
             if function_name == "terminal" and self._checkpoint_mgr.enabled:
                 try:
@@ -7536,6 +7550,17 @@ class AIAgent:
                         self._checkpoint_mgr.ensure_checkpoint(
                             work_dir, f"before {function_name}"
                         )
+                except Exception:
+                    pass  # never block tool execution
+
+            # TDD gate: track Python file edits and nudge if looping
+            if _block_msg is None and function_name in ("write_file", "patch"):
+                try:
+                    _tdd_file_path = function_args.get("path", "")
+                    if _is_tdd_gated_path(_tdd_file_path):
+                        _edit_count, _tdd_nudge = self._tdd_gate.record(_tdd_file_path, tool_call.id)
+                        if _tdd_nudge:
+                            self._tdd_pending_nudges.append(_tdd_nudge)
                 except Exception:
                     pass  # never block tool execution
 
@@ -10816,6 +10841,13 @@ class AIAgent:
                             pass
 
                     self._execute_tool_calls(assistant_message, messages, effective_task_id, api_call_count)
+
+                    # TDD gate: inject pending nudge messages if any file-edit loops detected
+                    if self._tdd_pending_nudges:
+                        for _tdd_nudge in self._tdd_pending_nudges:
+                            messages.append({"role": "user", "content": _tdd_nudge})
+                        self._vprint(f"  [tdd-gate] Injected {len(self._tdd_pending_nudges)} loop-detection nudge(s)")
+                        self._tdd_pending_nudges.clear()
 
                     # Reset per-turn retry counters after successful tool
                     # execution so a single truncation doesn't poison the
