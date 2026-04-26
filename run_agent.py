@@ -592,7 +592,6 @@ class AIAgent:
         checkpoints_enabled: bool = False,
         checkpoint_max_snapshots: int = 50,
         pass_session_id: bool = False,
-        persist_session: bool = True,
     ):
         """
         Initialize the AI Agent.
@@ -664,7 +663,6 @@ class AIAgent:
         self.background_review_callback = None  # Optional sync callback for gateway delivery
         self.skip_context_files = skip_context_files
         self.pass_session_id = pass_session_id
-        self.persist_session = persist_session
         self._credential_pool = credential_pool
         self.log_prefix_chars = log_prefix_chars
         self.log_prefix = f"{log_prefix} " if log_prefix else ""
@@ -2737,12 +2735,25 @@ class AIAgent:
                 with open(os.devnull, "w") as _devnull, \
                      contextlib.redirect_stdout(_devnull), \
                      contextlib.redirect_stderr(_devnull):
+                    # Inherit the parent agent's live runtime (provider, model,
+                    # base_url, api_key, api_mode) so the fork uses the exact
+                    # same credentials the main turn is using.  Without this,
+                    # AIAgent.__init__ re-runs auto-resolution from env vars,
+                    # which fails for OAuth-only providers, session-scoped
+                    # creds, or credential-pool setups where the resolver can't
+                    # reconstruct auth from scratch -- producing the spurious
+                    # "No LLM provider configured" warning at end of turn.
+                    _parent_runtime = self._current_main_runtime()
                     review_agent = AIAgent(
                         model=self.model,
                         max_iterations=8,
                         quiet_mode=True,
                         platform=self.platform,
                         provider=self.provider,
+                        api_mode=_parent_runtime.get("api_mode") or None,
+                        base_url=_parent_runtime.get("base_url") or None,
+                        api_key=_parent_runtime.get("api_key") or None,
+                        credential_pool=getattr(self, "_credential_pool", None),
                         parent_session_id=self.session_id,
                     )
                     review_agent._memory_write_origin = "background_review"
@@ -2843,10 +2854,7 @@ class AIAgent:
         """Save session state to both JSON log and SQLite on any exit path.
 
         Ensures conversations are never lost, even on errors or early returns.
-        Skipped when ``persist_session=False`` (ephemeral helper flows).
         """
-        if not self.persist_session:
-            return
         self._apply_persist_user_message_override(messages)
         self._session_messages = messages
         self._save_session_log(messages)
@@ -6808,7 +6816,6 @@ class AIAgent:
     def _copy_reasoning_content_for_api(self, source_msg: dict, api_msg: dict) -> None:
         _kore_copy_reasoning_content_for_api(source_msg, api_msg, self.provider, self.base_url, self.model)
 
-    @staticmethod
     @staticmethod
     def _sanitize_tool_calls_for_strict_api(api_msg):
         return _kore_sanitize_tool_calls_for_strict_api(api_msg)
