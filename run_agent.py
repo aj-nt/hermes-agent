@@ -6958,6 +6958,7 @@ class AIAgent:
                 query=function_args.get("query", ""),
                 role_filter=function_args.get("role_filter"),
                 limit=function_args.get("limit", 3),
+                fast=function_args.get("fast", True),
                 db=self._session_db,
                 current_session_id=self.session_id,
             )
@@ -7466,6 +7467,7 @@ class AIAgent:
                         query=function_args.get("query", ""),
                         role_filter=function_args.get("role_filter"),
                         limit=function_args.get("limit", 3),
+                        fast=function_args.get("fast", True),
                         db=self._session_db,
                         current_session_id=self.session_id,
                     )
