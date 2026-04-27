@@ -134,7 +134,7 @@ class ParsedResponse:
     @property
     def has_tool_calls(self) -> bool:
         """True if the response contains tool calls to dispatch."""
-        return len(self.tool_calls) > 0
+        return bool(self.tool_calls)
 
 
 # ============================================================================
