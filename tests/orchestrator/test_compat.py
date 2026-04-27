@@ -6,7 +6,6 @@ gateway, delegate_tool, and cron scheduler to continue working unchanged
 during cutover.
 
 Per DESIGN.md Phase 5:
-- Feature flag: USE_NEW_PIPELINE=true
 - Route chat() and run_conversation() through new Orchestrator
 - Run both paths in parallel for validation
 - AIAgent compatibility shim maps old attribute names to new fields
@@ -30,7 +29,6 @@ from agent.orchestrator.events import EventBus
 from agent.orchestrator.orchestrator import Orchestrator
 from agent.orchestrator.providers import ProviderRegistry
 from agent.orchestrator.tools import ToolExecutor
-
 
 # ============================================================================
 # Helpers
@@ -67,7 +65,6 @@ def _make_mock_provider(responses=None):
             )
 
     return MockProvider()
-
 
 # ============================================================================
 # Compat shim creation and interface
@@ -123,7 +120,6 @@ class TestCompatShimCreation:
         from agent.orchestrator.compat import AIAgentCompatShim
         shim = AIAgentCompatShim(model="test-model")
         assert hasattr(shim, 'get_activity_summary')
-
 
 # ============================================================================
 # Gateway-set attributes
@@ -212,7 +208,6 @@ class TestCompatShimGatewayAttributes:
         shim._last_activity_desc = "running tool"
         assert shim._last_activity_desc == "running tool"
 
-
 # ============================================================================
 # Delegate-readable attributes
 # ============================================================================
@@ -251,40 +246,12 @@ class TestCompatShimDelegateAttributes:
         # Default is Orchestrator.DEFAULT_MAX_ITERATIONS (90)
         assert shim.max_iterations == 90
 
-
 # ============================================================================
 # Feature flag
 # ============================================================================
 
-class TestFeatureFlag:
-    """USE_NEW_PIPELINE controls whether the shim routes through Orchestrator."""
-
-    def test_feature_flag_exists(self):
-        from run_agent import USE_NEW_PIPELINE
-        assert isinstance(USE_NEW_PIPELINE, bool)
-
-    def test_feature_flag_default_false(self):
-        """By default, the new pipeline is OFF — safe cutover."""
-        from run_agent import USE_NEW_PIPELINE
-        assert USE_NEW_PIPELINE is False
-
-    def test_feature_flag_can_be_overridden(self):
-        """Tests can override the feature flag via monkeypatch."""
-        import agent.orchestrator.compat as compat_module
-        original = run_agent.USE_NEW_PIPELINE
-        try:
-            run_agent.USE_NEW_PIPELINE = True
-            assert run_agent.USE_NEW_PIPELINE is True
-        finally:
-            run_agent.USE_NEW_PIPELINE = original
-
-
-# ============================================================================
-# chat() and run_conversation() routing
-# ============================================================================
-
 class TestShimRouting:
-    """When USE_NEW_PIPELINE=True, chat() and run_conversation() route through Orchestrator."""
+    """chat() and run_conversation() route through Orchestrator unconditionally."""
 
     def test_chat_returns_string(self):
         from agent.orchestrator.compat import AIAgentCompatShim
@@ -295,15 +262,8 @@ class TestShimRouting:
         shim = AIAgentCompatShim(model="test-model", registry=registry)
         shim._resolve_provider_name = lambda ctx: "mock"
 
-        # Monkeypatch the feature flag
-        import agent.orchestrator.compat as compat_module
-        original_flag = run_agent.USE_NEW_PIPELINE
-        try:
-            run_agent.USE_NEW_PIPELINE = True
-            result = shim.chat("Hello")
-            assert isinstance(result, str)
-        finally:
-            run_agent.USE_NEW_PIPELINE = original_flag
+        result = shim.chat("Hello")
+        assert isinstance(result, str)
 
     def test_run_conversation_returns_dict(self):
         from agent.orchestrator.compat import AIAgentCompatShim
@@ -316,16 +276,9 @@ class TestShimRouting:
         shim = AIAgentCompatShim(model="test-model", registry=registry)
         shim._resolve_provider_name = lambda ctx: "mock"
 
-        import agent.orchestrator.compat as compat_module
-        original_flag = run_agent.USE_NEW_PIPELINE
-        try:
-            run_agent.USE_NEW_PIPELINE = True
-            result = shim.run_conversation("Hello")
-            assert isinstance(result, dict)
-            assert "final_response" in result
-        finally:
-            run_agent.USE_NEW_PIPELINE = original_flag
-
+        result = shim.run_conversation("Hello")
+        assert isinstance(result, dict)
+        assert "final_response" in result
 
 # ============================================================================
 # switch_model()
@@ -353,7 +306,6 @@ class TestSwitchModel:
         # base_url should reflect the new value
         assert "anthropic" in shim.base_url or shim.base_url == "https://api.anthropic.com"
 
-
 # ============================================================================
 # interrupt()
 # ============================================================================
@@ -374,7 +326,6 @@ class TestInterrupt:
         shim.interrupt("user requested stop")
         # The reason is accessible somewhere on the shim
         assert shim._interrupt_reason == "user requested stop"
-
 
 # ============================================================================
 # Session state mapping

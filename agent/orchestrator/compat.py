@@ -1,7 +1,6 @@
 """AIAgent compatibility shim — maps old AIAgent API to new Orchestrator.
 
 Phase 6C (Battle-Test Wiring):
-- Feature flag: USE_NEW_PIPELINE controls routing
 - When True: run_conversation() delegates to Orchestrator, which delegates
   hard work (API calls, tool dispatch, streaming) back to the parent AIAgent
 - When False: pass-through to existing AIAgent (not implemented here)
@@ -40,11 +39,6 @@ logger = logging.getLogger(__name__)
 # Feature flag — controls whether new pipeline is used
 # ============================================================================
 
-# Feature flag sourced from run_agent — single source of truth.
-# References run_agent.USE_NEW_PIPELINE dynamically (not a copied value).
-import run_agent
-
-
 # ============================================================================
 # Helpers for converting SimpleNamespace results to dicts
 # ============================================================================
@@ -73,7 +67,6 @@ def _namespace_to_dict(obj: Any) -> Any:
                 if not k.startswith("_")}
     return obj
 
-
 def _get_finish_reason(result: Any) -> str:
     """Extract finish_reason from a SimpleNamespace or dict response."""
     try:
@@ -82,9 +75,6 @@ def _get_finish_reason(result: Any) -> str:
         return getattr(result.choices[0], "finish_reason", "stop") or "stop"
     except (AttributeError, IndexError, TypeError):
         return "stop"
-
-
-
 
 class AIAgentCompatShim:
     """Compatibility shim that maps the AIAgent external API to Orchestrator.
@@ -101,8 +91,7 @@ class AIAgentCompatShim:
 
     And the 13 gateway-set attributes + 13 delegate-readable attributes.
 
-    When USE_NEW_PIPELINE is True, routes through Orchestrator.
-    When False, this shim is not used (AIAgent runs directly).
+        When False, this shim is not used (AIAgent runs directly).
     """
 
     def __init__(
@@ -386,13 +375,7 @@ class AIAgentCompatShim:
     def chat(self, message: str, stream_callback: Optional[Callable] = None) -> str:
         """Simple chat interface that returns just the final response.
 
-        When USE_NEW_PIPELINE is True, delegates to Orchestrator.run().
-        """
-        if not run_agent.USE_NEW_PIPELINE:
-            raise NotImplementedError(
-                "AIAgentCompatShim.chat() requires USE_NEW_PIPELINE=True. "
-                "Use the original AIAgent for the old pipeline."
-            )
+                """
 
         # Wire stream callback if provided
         if stream_callback is not None:
@@ -420,10 +403,6 @@ class AIAgentCompatShim:
             ...
         }
         """
-        if not run_agent.USE_NEW_PIPELINE:
-            raise NotImplementedError(
-                "AIAgentCompatShim.run_conversation() requires USE_NEW_PIPELINE=True."
-            )
 
         logger.info(f"[pipeline] run_conversation called: message length={len(message)}")
 

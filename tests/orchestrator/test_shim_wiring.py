@@ -15,7 +15,6 @@ from agent.orchestrator.events import EventBus
 from agent.orchestrator.providers import ProviderRegistry
 from agent.orchestrator.tools import ToolExecutor
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -28,7 +27,6 @@ def _make_mock_provider(return_text="Hello from mock"):
     )
     provider.call.return_value = result
     return provider, result
-
 
 def _make_shim_with_parent(parent_agent=None, provider=None, registry=None):
     """Create an AIAgentCompatShim with optional parent agent."""
@@ -44,7 +42,6 @@ def _make_shim_with_parent(parent_agent=None, provider=None, registry=None):
     )
     shim._resolve_provider_name = lambda ctx: "mock"
     return shim
-
 
 # ---------------------------------------------------------------------------
 # Test: RequestPrepStage accepts optional prepare_fn
@@ -73,7 +70,6 @@ class TestRequestPrepStagePrepareFn:
         result = stage.process(ctx)
         assert len(called) == 1
         assert result is ctx
-
 
 # ---------------------------------------------------------------------------
 # Test: SessionState has total_tokens for return dict
@@ -108,7 +104,6 @@ class TestSessionStateTotalTokens:
         assert hasattr(state, "output_tokens")
         assert state.output_tokens == 0
 
-
 # ---------------------------------------------------------------------------
 # Test: CompatShim run_conversation returns correct dict shape (no parent)
 # ---------------------------------------------------------------------------
@@ -116,7 +111,6 @@ class TestSessionStateTotalTokens:
 class TestShimRoutingNoParent:
     """Verify CompatShim routing with mock provider and no parent agent."""
 
-    @patch("run_agent.USE_NEW_PIPELINE", True)
     def test_run_conversation_returns_dict_with_total_tokens(self):
         """run_conversation must return a dict with total_tokens key."""
         provider, _ = _make_mock_provider()
@@ -125,7 +119,6 @@ class TestShimRoutingNoParent:
         result = shim.run_conversation("Hello")
         assert isinstance(result, dict)
         assert "total_tokens" in result
-
 
 # ---------------------------------------------------------------------------
 # Test: CompatShim conditionally injects prepare_fn
@@ -146,7 +139,6 @@ class TestShimPrepareFnInjection:
         shim = _make_shim_with_parent(parent_agent=mock_parent)
         rp_stage = shim._orchestrator.request_prep
         assert rp_stage._prepare_fn is not None
-
 
 # ---------------------------------------------------------------------------
 # Test: Provider resolution delegates through shim
@@ -186,7 +178,6 @@ class TestShimProviderResolution:
             f"Orchestrator must delegate provider resolution to shim. "
             f"Got '{resolved}' instead of 'mock'"
         )
-
 
 # ---------------------------------------------------------------------------
 # Test: _prepare_request delegates to parent AIAgent (Task 6)
@@ -233,7 +224,6 @@ class TestPrepareRequestDelegation:
         with pytest.raises(RuntimeError, match="No parent AIAgent"):
             shim._prepare_request(ctx)
 
-
 # ---------------------------------------------------------------------------
 # Test: _bridge_streaming wires EventBus to AIAgent callbacks (Task 5)
 # ---------------------------------------------------------------------------
@@ -271,7 +261,6 @@ class TestBridgeStreaming:
         ))
         mock_agent.step_callback.assert_called_once()
 
-
 # ---------------------------------------------------------------------------
 # Test: _sync_state_to_ctx wires system prompt + tools (Task 4)
 # ---------------------------------------------------------------------------
@@ -306,7 +295,6 @@ class TestSyncStateToCtx:
         shim._state.system_prompt = "Fallback prompt"
         shim._sync_state_to_ctx()
         assert shim._ctx.system_prompt == "Fallback prompt"
-
 
 # ---------------------------------------------------------------------------
 # Test: _sync_ctx_to_state updates token counts (Task 8)
@@ -344,7 +332,6 @@ class TestSyncCtxToState:
         shim._sync_ctx_to_state(result)
         assert shim._state.total_tokens == 0
 
-
 # ---------------------------------------------------------------------------
 # Test: ResponseProcessingStage passes usage through (Task 8 dependency)
 # ---------------------------------------------------------------------------
@@ -381,7 +368,6 @@ class TestResponseProcessingUsagePropagation:
         parsed = stage.process(ConversationContext(session_id="s1"), provider_result)
         assert parsed.usage is not None, "ParsedResponse.usage must fall back to provider_result.usage when response dict lacks usage"
         assert parsed.usage.total_tokens == 150
-
 
 # ---------------------------------------------------------------------------
 # Test: _wire_real_tools registers parent tool definitions (Task 3)
@@ -433,41 +419,8 @@ class TestCompatShimParentInjection:
             "wiring that enables battle-test delegation."
         )
 
-
 # ---------------------------------------------------------------------------
 # Test: USE_NEW_PIPELINE is sourced from run_agent, not duplicated
-# ---------------------------------------------------------------------------
-
-class TestFeatureFlagSourceOfTruth:
-    """The USE_NEW_PIPELINE flag must have a single source of truth in
-    run_agent.py. compat.py references it dynamically via
-    run_agent.USE_NEW_PIPELINE, not via a copied local variable."""
-
-    def test_compat_has_no_standalone_flag(self):
-        """compat.py must not define its own USE_NEW_PIPELINE bool.
-        The flag must be read dynamically from run_agent so flipping
-        it there takes immediate effect."""
-        import agent.orchestrator.compat as compat_mod
-        # The module should NOT have its own USE_NEW_PIPELINE attribute
-        # (it was a standalone bool = False that didn't track run_agent's flag)
-        assert not hasattr(compat_mod, "USE_NEW_PIPELINE") or                compat_mod.USE_NEW_PIPELINE is not False or True, (
-            "compat.py should not define its own USE_NEW_PIPELINE — "
-            "it must read run_agent.USE_NEW_PIPELINE dynamically"
-        )
-
-    def test_compat_guards_reference_run_agent_flag(self):
-        """The guard checks in compat.py must read
-        run_agent.USE_NEW_PIPELINE, not a local copy."""
-        import inspect, agent.orchestrator.compat as compat_mod
-        source = inspect.getsource(compat_mod)
-        assert "run_agent.USE_NEW_PIPELINE" in source, (
-            "compat.py must reference run_agent.USE_NEW_PIPELINE directly, "
-            "not via a copied/stub local variable"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Test: _make_provider_call converts SimpleNamespace to dict
 # ---------------------------------------------------------------------------
 
 class TestProviderCallNamespaceConversion:
@@ -502,7 +455,6 @@ class TestProviderCallNamespaceConversion:
             f"got {type(result).__name__}: {result}"
         )
         assert "choices" in result, "Converted dict must contain 'choices' key"
-
 
 # ---------------------------------------------------------------
 # TestPipelineLogging — Task 10: structured [pipeline] logging
@@ -581,14 +533,10 @@ class TestPipelineLogging:
         )
         shim._orchestrator.run = MagicMock(return_value=mock_result)
         
-        # Temporarily enable the pipeline flag
-        original_flag = run_agent.USE_NEW_PIPELINE
-        run_agent.USE_NEW_PIPELINE = True
-        try:
+        with caplog.at_level(logging.INFO, logger="agent.orchestrator.compat"):
             with caplog.at_level(logging.INFO, logger="agent.orchestrator.compat"):
                 shim.run_conversation("Hello")
-        finally:
-            run_agent.USE_NEW_PIPELINE = original_flag
+
         
         pipeline_logs = [r for r in caplog.records if "[pipeline]" in r.message and "completed" in r.message.lower()]
         assert len(pipeline_logs) >= 1, f"Expected [pipeline] completion log, got: {[r.message for r in caplog.records if '[pipeline]' in r.message]}"
