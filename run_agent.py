@@ -1728,6 +1728,41 @@ class AIAgent:
             parent_agent=self,
         )
 
+        # Enforce structural invariants
+        self._check_invariants()
+
+    def _check_invariants(self) -> None:
+        """Verify structural invariants after __init__.
+
+        These checks catch misconfiguration that would silently break
+        the pipeline at runtime — e.g. CompatShim not created because
+        of an indentation bug that placed it inside an if-block.
+        """
+        from agent.orchestrator.compat import AIAgentCompatShim
+        from agent.orchestrator.memory import MemoryCoordinator
+
+        assert hasattr(self, "_new_pipeline") and self._new_pipeline is not None, (
+            "Invariant violation: _new_pipeline not created. "
+            "The CompatShim may have been placed inside an if-block "
+            "due to an indentation error."
+        )
+        assert isinstance(self._new_pipeline, AIAgentCompatShim), (
+            f"Invariant violation: _new_pipeline is {type(self._new_pipeline).__name__}, "
+            f"expected AIAgentCompatShim."
+        )
+        assert isinstance(self._new_pipeline.memory, MemoryCoordinator), (
+            "Invariant violation: _new_pipeline.memory is not a MemoryCoordinator."
+        )
+        assert self.session_id, (
+            "Invariant violation: session_id is empty."
+        )
+        for method_name in ("switch_model", "interrupt", "chat",
+                            "run_conversation", "commit_memory_session",
+                            "shutdown_memory_provider", "release_clients"):
+            assert getattr(self._new_pipeline, method_name, None) is not None, (
+                f"Invariant violation: _new_pipeline.{method_name} is None."
+            )
+
     def reset_session_state(self):
         """Reset all session-scoped token counters to 0 for a fresh session.
         

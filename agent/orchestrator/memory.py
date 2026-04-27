@@ -188,6 +188,8 @@ class MemoryCoordinator:
         # Store and Manager wired in Phase 2
         self.store: Any = None
         self.manager: Any = None
+        self._memory_enabled: bool = False
+        self._user_profile_enabled: bool = False
 
     # --- Lifecycle (Phase 2 shells) ---
 
@@ -272,6 +274,10 @@ class MemoryCoordinator:
         Memory tool (add/replace/delete/search/consolidate) goes to store.
         External memory tools go to manager if manager.has_tool() returns True.
         """
+        if tool_name is None or not isinstance(tool_name, str) or not tool_name.strip():
+            raise ValueError(f"handle_tool_call tool_name must be a non-empty string, got {tool_name!r}")
+        if not isinstance(args, dict):
+            raise TypeError(f"handle_tool_call args must be a dict, got {type(args).__name__}")
         if tool_name == "memory" and self.store is not None:
             return self.store.handle_tool_call(tool_name, args, metadata)
         if self.manager is not None and self.manager.has_tool(tool_name):

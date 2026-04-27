@@ -19,6 +19,9 @@ from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
 
 from agent.orchestrator.memory import MemoryCoordinator
+from agent.orchestrator.stages import PreparedRequest
+
+
 from agent.orchestrator.context import (
     ConversationContext,
     ParsedResponse,
@@ -335,14 +338,13 @@ class AIAgentCompatShim:
         self.memory.record_tool_use(name)
         return result
 
-    def _prepare_request(self, ctx: ConversationContext) -> "PreparedRequest":
+    def _prepare_request(self, ctx: ConversationContext) -> PreparedRequest:
         """Build API kwargs using AIAgent._build_api_kwargs.
 
         Called by RequestPrepStage when _prepare_fn is set. This injects
         the parent's system prompt, tools schema, and API parameters into
         the pipeline — everything that _build_api_kwargs produces.
         """
-        from agent.orchestrator.stages import PreparedRequest
 
         if self._agent is None:
             raise RuntimeError("[pipeline] No parent AIAgent for request preparation")
@@ -386,6 +388,12 @@ class AIAgentCompatShim:
         """Simple chat interface that returns just the final response.
 
                 """
+        if message is None:
+            raise TypeError("chat() message must be a string, got None")
+        if not isinstance(message, str):
+            raise TypeError(f"chat() message must be a string, got {type(message).__name__}")
+        if not message.strip():
+            raise ValueError("chat() message must not be empty")
 
         # Wire stream callback if provided
         if stream_callback is not None:
@@ -457,7 +465,7 @@ class AIAgentCompatShim:
     # External method 3: interrupt()
     # ========================================================================
 
-    def interrupt(self, message: str = None) -> None:
+    def interrupt(self, message: Optional[str] = None) -> None:
         """Interrupt the current conversation. Sets the interrupt event."""
         self._interrupt_reason = message or "interrupted"
         self._ctx.interrupt_event.set()
@@ -489,7 +497,7 @@ class AIAgentCompatShim:
     # External method 6: shutdown_memory_provider()
     # ========================================================================
 
-    def shutdown_memory_provider(self, messages: list = None) -> None:
+    def shutdown_memory_provider(self, messages: Optional[list] = None) -> None:
         """Shut down memory provider at session end."""
         if self._agent is not None and hasattr(self._agent, "shutdown_memory_provider"):
             self._agent.shutdown_memory_provider(messages)
@@ -501,7 +509,7 @@ class AIAgentCompatShim:
     # External method 7: commit_memory_session()
     # ========================================================================
 
-    def commit_memory_session(self, messages: list = None) -> None:
+    def commit_memory_session(self, messages: Optional[list] = None) -> None:
         """Commit memory session (e.g., on /new command)."""
         if self._agent is not None and hasattr(self._agent, "commit_memory_session"):
             self._agent.commit_memory_session(messages)
