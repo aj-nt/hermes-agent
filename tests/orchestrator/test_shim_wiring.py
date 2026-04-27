@@ -502,3 +502,93 @@ class TestProviderCallNamespaceConversion:
             f"got {type(result).__name__}: {result}"
         )
         assert "choices" in result, "Converted dict must contain 'choices' key"
+
+
+# ---------------------------------------------------------------
+# TestPipelineLogging — Task 10: structured [pipeline] logging
+# ---------------------------------------------------------------
+
+class TestPipelineLogging:
+    """Verify [pipeline] prefix appears at all delegation points."""
+
+    def test_bridge_streaming_logs_pipeline(self, caplog):
+        """_bridge_streaming should emit a [pipeline] log."""
+        import logging
+        mock_agent = MagicMock()
+        mock_agent.stream_delta_callback = MagicMock()
+        shim = AIAgentCompatShim(parent_agent=mock_agent, model="test")
+        
+        with caplog.at_level(logging.INFO, logger="agent.orchestrator.compat"):
+            shim._bridge_streaming()
+        
+        pipeline_logs = [r for r in caplog.records if "[pipeline]" in r.message]
+        # Should log that streaming bridge was set up
+        assert len(pipeline_logs) >= 1, f"Expected [pipeline] log in bridge_streaming, got: {[r.message for r in caplog.records]}"
+
+    def test_sync_state_to_ctx_logs_pipeline(self, caplog):
+        """_sync_state_to_ctx should emit a [pipeline] log."""
+        import logging
+        mock_agent = MagicMock()
+        mock_agent._build_system_prompt.return_value = "You are helpful."
+        mock_agent.tools = []
+        shim = AIAgentCompatShim(parent_agent=mock_agent, model="test")
+        
+        with caplog.at_level(logging.INFO, logger="agent.orchestrator.compat"):
+            shim._sync_state_to_ctx()
+        
+        pipeline_logs = [r for r in caplog.records if "[pipeline]" in r.message]
+        assert len(pipeline_logs) >= 1, f"Expected [pipeline] log in sync_state_to_ctx, got: {[r.message for r in caplog.records]}"
+
+    def test_chat_logs_pipeline(self, caplog):
+        """chat() should emit a [pipeline] log."""
+        import logging
+        mock_agent = MagicMock()
+        mock_agent._interruptible_streaming_api_call.return_value = MagicMock()
+        shim = AIAgentCompatShim(parent_agent=mock_agent, model="test")
+        
+        with caplog.at_level(logging.INFO, logger="agent.orchestrator.compat"):
+            try:
+                shim.chat("Hello")
+            except Exception:
+                pass  # We just want to check logging, not full pipeline
+        
+        pipeline_logs = [r for r in caplog.records if "[pipeline]" in r.message]
+        assert len(pipeline_logs) >= 1, f"Expected [pipeline] log in chat(), got: {[r.message for r in caplog.records]}"
+
+    def test_pipeline_completion_log(self, caplog):
+        """run_conversation should log [pipeline] completion with iterations and finish_reason."""
+        import logging
+        mock_agent = MagicMock()
+        mock_agent._build_system_prompt.return_value = "You are helpful."
+        mock_agent._build_api_kwargs.return_value = {"model": "test", "messages": []}
+        mock_agent.tools = []
+        
+        shim = AIAgentCompatShim(parent_agent=mock_agent, model="test")
+        
+        # Mock the orchestrator.run() to return a simple result
+        # so we test logging, not the full pipeline chain
+        from agent.orchestrator.stages import PipelineResult
+        from agent.orchestrator.context import ParsedResponse, UsageInfo
+        mock_result = PipelineResult(
+            response=ParsedResponse(
+                message={"role": "assistant", "content": "Done"},
+                tool_calls=[],
+                finish_reason="stop",
+                usage=UsageInfo(prompt_tokens=5, completion_tokens=3, total_tokens=8),
+            ),
+            iterations=1,
+            interrupted=False,
+        )
+        shim._orchestrator.run = MagicMock(return_value=mock_result)
+        
+        # Temporarily enable the pipeline flag
+        original_flag = run_agent.USE_NEW_PIPELINE
+        run_agent.USE_NEW_PIPELINE = True
+        try:
+            with caplog.at_level(logging.INFO, logger="agent.orchestrator.compat"):
+                shim.run_conversation("Hello")
+        finally:
+            run_agent.USE_NEW_PIPELINE = original_flag
+        
+        pipeline_logs = [r for r in caplog.records if "[pipeline]" in r.message and "completed" in r.message.lower()]
+        assert len(pipeline_logs) >= 1, f"Expected [pipeline] completion log, got: {[r.message for r in caplog.records if '[pipeline]' in r.message]}"

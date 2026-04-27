@@ -246,6 +246,7 @@ class AIAgentCompatShim:
         - stream_delta_callback → gateway stream consumer
         - step_callback → gateway progress display
         """
+        logger.info("[pipeline] Streaming bridge set up (delta + reasoning events)")
         shim = self  # closure reference
 
         def on_stream_delta(event: PipelineEvent) -> None:
@@ -397,6 +398,7 @@ class AIAgentCompatShim:
         if stream_callback is not None:
             self.stream_delta_callback = stream_callback
 
+        logger.info(f"[pipeline] chat called: message length={len(message)}")
         result = self.run_conversation(message, stream_callback=stream_callback)
         return result.get("final_response", "")
 
@@ -444,6 +446,12 @@ class AIAgentCompatShim:
         final_response = ""
         if result.response and result.response.message:
             final_response = result.response.message.get("content", "")
+
+        logger.info(
+            f"[pipeline] run_conversation completed: {result.iterations} iterations, "
+            f"finish_reason={result.response.finish_reason if result.response else None}, "
+            f"tokens={self._state.total_tokens}"
+        )
 
         return {
             "final_response": final_response,
@@ -576,6 +584,7 @@ class AIAgentCompatShim:
 
     def _sync_state_to_ctx(self) -> None:
         """Copy SessionState fields + parent's system prompt into ConversationContext."""
+        logger.info(f"[pipeline] Syncing state to context: {len(self._state.messages)} messages")
         self._ctx.messages = self._state.messages
         self._ctx.session_id = self._state.session_id
         self._ctx.max_iterations = self.max_iterations
