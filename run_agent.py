@@ -1714,20 +1714,19 @@ class AIAgent:
                 "is_anthropic_oauth": self._is_anthropic_oauth,
             })
 
-        # delegates to the new Orchestrator. When False (default),
-        # _new_pipeline is not created and old code runs unchanged.
-        # Construct new pipeline orchestrator
-            from agent.orchestrator.compat import AIAgentCompatShim
-            self._new_pipeline = AIAgentCompatShim(
-                model=model,
-                provider=provider_name or provider or "",
-                base_url=base_url or "",
-                api_key=api_key or "",
-                max_iterations=max_iterations,
-                api_mode=getattr(self, "api_mode", "chat_completions"),
-                session_id=session_id or "",
-                parent_agent=self,
-            )
+        # Construct new pipeline orchestrator (unconditional)
+        # Phase 6B-2: feature flag removed. Delegation is always on.
+        from agent.orchestrator.compat import AIAgentCompatShim
+        self._new_pipeline = AIAgentCompatShim(
+            model=model,
+            provider=provider_name or provider or "",
+            base_url=base_url or "",
+            api_key=api_key or "",
+            max_iterations=max_iterations,
+            api_mode=getattr(self, "api_mode", "chat_completions"),
+            session_id=session_id or "",
+            parent_agent=self,
+        )
 
     def reset_session_state(self):
         """Reset all session-scoped token counters to 0 for a fresh session.
