@@ -1745,6 +1745,7 @@ class AIAgent:
                 max_iterations=max_iterations,
                 api_mode=getattr(self, "api_mode", "chat_completions"),
                 session_id=session_id or "",
+                parent_agent=self,
             )
         else:
             self._new_pipeline = None
