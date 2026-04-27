@@ -398,8 +398,20 @@ class SessionDB:
                 # message items instead of flattening to plain assistant text.
                 try:
                     cursor.execute('ALTER TABLE messages ADD COLUMN "codex_message_items" TEXT')
-                except sqlite3.OperationalError:
-                    pass  # Column already exists
+                except sqlite3.OperationalError as e:
+                    err_msg = str(e).lower()
+                    if "duplicate column" in err_msg:
+                        pass  # Column already exists — expected on re-run
+                    else:
+                        logger.warning("v9 migration ALTER TABLE failed: %s", e)
+                        raise  # Unexpected error — don't silently skip
+                # Verify the column actually exists before bumping schema version
+                col_check = [row[1] for row in cursor.execute("PRAGMA table_info(messages)").fetchall()]
+                if "codex_message_items" not in col_check:
+                    raise RuntimeError(
+                        f"v9 migration failed: codex_message_items column missing after ALTER TABLE. "
+                        f"Columns: {col_check}"
+                    )
                 cursor.execute("UPDATE schema_version SET version = 9")
                 needs_reindex = True
             if current_version < 10:
