@@ -95,3 +95,17 @@ from agent.kore.tdd_gate import (
 from agent.kore.steer import (
     apply_steer_to_tool_results,
 )
+
+from agent.kore.tool_scheduling import (
+    NEVER_PARALLEL_TOOLS as _NEVER_PARALLEL_TOOLS,
+    PARALLEL_SAFE_TOOLS as _PARALLEL_SAFE_TOOLS,
+    PATH_SCOPED_TOOLS as _PATH_SCOPED_TOOLS,
+    MAX_TOOL_WORKERS as _MAX_TOOL_WORKERS,
+    DESTRUCTIVE_PATTERNS as _DESTRUCTIVE_PATTERNS,
+    REDIRECT_OVERWRITE as _REDIRECT_OVERWRITE,
+    is_destructive_command as _is_destructive_command,
+    should_parallelize_tool_batch as _should_parallelize_tool_batch,
+    extract_parallel_scope_path as _extract_parallel_scope_path,
+    paths_overlap as _paths_overlap,
+    pool_may_recover_from_rate_limit as _pool_may_recover_from_rate_limit,
+)

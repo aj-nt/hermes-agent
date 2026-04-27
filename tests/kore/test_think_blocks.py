@@ -219,3 +219,83 @@ class TestThinkBlocksBackwardCompat:
             extracted = has_content_after_think_block(case)
             original = agent._has_content_after_think_block(case)
             assert extracted == original, f"Mismatch for: {case!r}"
+
+
+class TestLooksLikeCodexIntermediateAck:
+    """Tests for looks_like_codex_intermediate_ack()."""
+
+    def test_returns_false_with_tool_messages(self):
+        from agent.kore.think_blocks import looks_like_codex_intermediate_ack
+        messages = [{"role": "tool", "content": "result"}]
+        assert looks_like_codex_intermediate_ack("check the repo", "I'll look into it", messages) is False
+
+    def test_returns_false_for_empty_assistant(self):
+        from agent.kore.think_blocks import looks_like_codex_intermediate_ack
+        assert looks_like_codex_intermediate_ack("check the repo", "", []) is False
+
+    def test_returns_false_for_long_assistant(self):
+        from agent.kore.think_blocks import looks_like_codex_intermediate_ack
+        long_text = "x" * 1201
+        assert looks_like_codex_intermediate_ack("check the repo", long_text, []) is False
+
+    def test_returns_false_without_future_ack(self):
+        from agent.kore.think_blocks import looks_like_codex_intermediate_ack
+        assert looks_like_codex_intermediate_ack("check the repo", "The repo has 5 files.", []) is False
+
+    def test_returns_true_with_workspace_ack(self):
+        from agent.kore.think_blocks import looks_like_codex_intermediate_ack
+        assert looks_like_codex_intermediate_ack(
+            "check the repo",
+            "I'll look into the codebase and report back.",
+            [],
+        ) is True
+
+    def test_returns_true_with_user_workspace_target(self):
+        from agent.kore.think_blocks import looks_like_codex_intermediate_ack
+        assert looks_like_codex_intermediate_ack(
+            "what's in the ~/project directory?",
+            "I'll check that for you.",
+            [],
+        ) is True
+
+    def test_returns_false_without_action_marker(self):
+        from agent.kore.think_blocks import looks_like_codex_intermediate_ack
+        # Has future ack but no action marker targeting workspace
+        assert looks_like_codex_intermediate_ack(
+            "tell me about weather",
+            "I'll tell you about the weather.",
+            [],
+        ) is False
+
+    def test_returns_true_with_curly_apostrophe(self):
+        from agent.kore.think_blocks import looks_like_codex_intermediate_ack
+        # Curly apostrophe (U+2019) in "I'll"
+        assert looks_like_codex_intermediate_ack(
+            "check the repo",
+            "I\u2019ll review the codebase.",
+            [],
+        ) is True
+
+    def test_think_block_stripped_before_check(self):
+        from agent.kore.think_blocks import looks_like_codex_intermediate_ack
+        open_tag = chr(60) + "think" + chr(62)
+        close_tag = chr(60) + "/think" + chr(62)
+        content = open_tag + "reasoning" + close_tag + "I'll look into the project and report back."
+        assert looks_like_codex_intermediate_ack("check the repo", content, []) is True
+
+    def test_backward_compat_matches_agent(self):
+        """Verify extracted function matches the AIAgent method."""
+        from agent.kore.think_blocks import looks_like_codex_intermediate_ack
+        from run_agent import AIAgent
+        agent = AIAgent.__new__(AIAgent)
+        cases = [
+            ("check the repo", "I'll look into the codebase.", []),
+            ("tell me about weather", "I'll tell you about the weather.", []),
+            ("", "I'll check that.", []),
+            ("check ~/src", "Let me review the project.", []),
+            ("what's up", "The repo has 5 files.", []),
+        ]
+        for user_msg, assistant, msgs in cases:
+            extracted = looks_like_codex_intermediate_ack(user_msg, assistant, msgs)
+            original = agent._looks_like_codex_intermediate_ack(user_msg, assistant, msgs)
+            assert extracted == original, f"Mismatch for: {user_msg!r}, {assistant!r}"
