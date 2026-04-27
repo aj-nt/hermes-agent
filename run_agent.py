@@ -136,6 +136,14 @@ from agent.trajectory import (
 from utils import atomic_json_write, base_url_host_matches, base_url_hostname, env_var_enabled, normalize_proxy_url
 
 
+# ============================================================================
+# Feature flag: new Orchestrator pipeline
+# ============================================================================
+# When True, chat() / run_conversation() delegate to the new pipeline
+# defined in agent/orchestrator/. When False (default), the existing
+# AIAgent code runs unchanged — safe cutover per DESIGN.md Phase 6.
+USE_NEW_PIPELINE: bool = False
+
 
 class _SafeWriter:
     """Transparent stdio wrapper that catches OSError/ValueError from broken pipes.
@@ -1723,6 +1731,25 @@ class AIAgent:
                 "is_anthropic_oauth": self._is_anthropic_oauth,
             })
 
+        # --- Phase 6: New pipeline construction ---
+        # When USE_NEW_PIPELINE is True, construct a CompatShim that
+        # delegates to the new Orchestrator. When False (default),
+        # _new_pipeline is not created and old code runs unchanged.
+        if USE_NEW_PIPELINE:
+            from agent.orchestrator.compat import AIAgentCompatShim
+            self._new_pipeline = AIAgentCompatShim(
+                model=model,
+                provider=provider_name or provider or "",
+                base_url=base_url or "",
+                api_key=api_key or "",
+                max_iterations=max_iterations,
+                api_mode=getattr(self, "api_mode", "chat_completions"),
+                session_id=session_id or "",
+            )
+        else:
+            self._new_pipeline = None
+        # --- End Phase 6 construction ---
+
     def reset_session_state(self):
         """Reset all session-scoped token counters to 0 for a fresh session.
         
@@ -1776,6 +1803,11 @@ class AIAgent:
         change persists across turns (unlike fallback which is
         turn-scoped).
         """
+        # --- Phase 6: New pipeline delegation ---
+        if USE_NEW_PIPELINE and getattr(self, "_new_pipeline", None) is not None:
+            return self._new_pipeline.switch_model(new_model, new_provider, api_key=api_key, base_url=base_url, api_mode=api_mode)
+        # --- End Phase 6 delegation ---
+
         from hermes_cli.providers import determine_api_mode
 
         # ── Determine api_mode if not provided ──
@@ -2825,6 +2857,11 @@ class AIAgent:
             if session_has_running_agent:
                 running_agent.interrupt(new_message.text)
         """
+        # --- Phase 6: New pipeline delegation ---
+        if USE_NEW_PIPELINE and getattr(self, "_new_pipeline", None) is not None:
+            return self._new_pipeline.interrupt(message)
+        # --- End Phase 6 delegation ---
+
         self._interrupt_requested = True
         self._interrupt_message = message
         # Signal all tools to abort any in-flight operations immediately.
@@ -7443,6 +7480,14 @@ class AIAgent:
         Returns:
             Dict: Complete conversation result with final response and message history
         """
+        # --- Phase 6: New pipeline delegation ---
+        if USE_NEW_PIPELINE and getattr(self, "_new_pipeline", None) is not None:
+            kwargs = {}
+            if system_message is not None:
+                kwargs["system_message"] = system_message
+            return self._new_pipeline.run_conversation(user_message, **kwargs)
+        # --- End Phase 6 delegation ---
+
         # Guard stdio against OSError from broken pipes (systemd/headless/daemon).
         # Installed once, transparent when streams are healthy, prevents crash on write.
         _install_safe_stdio()

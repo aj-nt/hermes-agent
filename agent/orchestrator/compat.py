@@ -63,6 +63,7 @@ class AIAgentCompatShim:
         base_url: str = "",
         api_key: str = "",
         max_iterations: Optional[int] = None,
+        api_mode: str = "",
         session_id: str = "",
         registry: Optional[ProviderRegistry] = None,
         event_bus: Optional[EventBus] = None,
@@ -75,6 +76,7 @@ class AIAgentCompatShim:
         self.provider = provider
         self.base_url = base_url
         self.api_key = api_key
+        self.api_mode = api_mode
         self.session_id = session_id or f"session-{id(self)}"
         self.max_iterations = max_iterations or Orchestrator.DEFAULT_MAX_ITERATIONS
 
@@ -273,6 +275,8 @@ class AIAgentCompatShim:
             self.base_url = base_url
         if api_key:
             self.api_key = api_key
+        if api_mode:
+            self.api_mode = api_mode
 
         # Update inner state
         self._state.active_model = new_model
