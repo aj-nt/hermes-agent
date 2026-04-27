@@ -18,6 +18,7 @@ import time
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
 
+from agent.orchestrator.memory import MemoryCoordinator
 from agent.orchestrator.context import (
     ConversationContext,
     ParsedResponse,
@@ -112,6 +113,13 @@ class AIAgentCompatShim:
     ) -> None:
         # --- Parent agent reference (for delegation) ---
         self._agent = parent_agent
+        # Memory coordinator (must exist before parent wiring below)
+        self.memory = MemoryCoordinator(session_id=session_id or f"session-{id(self)}")
+        if parent_agent is not None:
+            self.memory.store = getattr(parent_agent, "_memory_store", None)
+            self.memory.manager = getattr(parent_agent, "_memory_manager", None)
+            self.memory._memory_enabled = getattr(parent_agent, "_memory_enabled", False)
+            self.memory._user_profile_enabled = getattr(parent_agent, "_user_profile_enabled", False)
 
         # --- Core identity (delegate-readable) ---
         self.model = model

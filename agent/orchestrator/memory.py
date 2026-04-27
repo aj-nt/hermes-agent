@@ -224,8 +224,23 @@ class MemoryCoordinator:
     def build_prompt_blocks(self) -> list[str]:
         """Return ordered prompt blocks for memory, user profile, external."""
         blocks: list[str] = []
-        # Phase 2: wire up MemoryStore.format_for_system_prompt()
-        #          and MemoryManager.build_system_prompt()
+        if self.store:
+            if self._memory_enabled:
+                mem_block = self.store.format_for_system_prompt("memory")
+                if mem_block:
+                    blocks.append(mem_block)
+            if self._user_profile_enabled:
+                user_block = self.store.format_for_system_prompt("user")
+                if user_block:
+                    blocks.append(user_block)
+            # Recent context is always included when store exists
+            recent_block = self.store.format_for_system_prompt("recent_context")
+            if recent_block:
+                blocks.append(recent_block)
+        if self.manager:
+            ext_block = self.manager.build_system_prompt()
+            if ext_block:
+                blocks.append(ext_block)
         return blocks
 
     # --- Tool Integration ---
