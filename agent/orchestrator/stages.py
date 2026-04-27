@@ -312,7 +312,7 @@ class ResponseProcessingStage:
         # Extract finish reason
         finish_reason = choice.get("finish_reason", provider_result.finish_reason or "stop")
 
-        # Extract usage
+        # Extract usage (from response dict, falling back to provider_result.usage)
         usage_raw = response.get("usage", {})
         usage = None
         if usage_raw:
@@ -323,6 +323,8 @@ class ResponseProcessingStage:
                 cache_read_tokens=usage_raw.get("cache_read_tokens", 0),
                 cache_creation_tokens=usage_raw.get("cache_creation_tokens", 0),
             )
+        elif provider_result.usage is not None:
+            usage = provider_result.usage
 
         return ParsedResponse(
             message=canonical_message,
