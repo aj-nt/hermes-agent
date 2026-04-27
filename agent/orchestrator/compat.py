@@ -231,7 +231,8 @@ class AIAgentCompatShim:
             func = tool_def.get("function", {})
             name = func.get("name", "")
             if name:
-                self._tool_executor.register(name, handler=self._dispatch_tool)
+                # Wrap in lambda to capture tool name — ToolExecutor calls handler(args_dict)
+                self._tool_executor.register(name, handler=lambda a, n=name: self._dispatch_tool(n, a))
                 registered += 1
 
         logger.info(f"[pipeline] Registered {registered} tools with ToolExecutor")
