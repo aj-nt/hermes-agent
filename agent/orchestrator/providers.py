@@ -152,25 +152,81 @@ class FallbackChain:
 class CredentialManager:
     """Owns credential lifecycle, rotation, and fallback decisions.
 
-    Phase 1: Shell with interface. Phase 2: Wire up to existing
-    credential_pool.py and credential_sources.py.
+    Wraps the existing CredentialPool (agent/credential_pool.py) for
+    multi-credential failover, and provides error classification that
+    feeds into FallbackChain decisions.
+
+    Phase 2: Enhanced with pool delegation, restore_primary, and
+    richer error classification (503, 529, context overflow).
+    Full error_classifier integration comes in Phase 5.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, credential_pool: Any = None) -> None:
         self._credentials: dict[str, Any] = {}
+        self._primary_api_key: Optional[str] = None
+        self.active_pool: Any = credential_pool
+
+    @property
+    def primary_api_key(self) -> Optional[str]:
+        return self._primary_api_key
+
+    @primary_api_key.setter
+    def primary_api_key(self, value: Optional[str]) -> None:
+        self._primary_api_key = value
 
     def get_credential(self, provider: str) -> Optional[str]:
-        """Get best available credential for the given provider."""
+        """Get best available credential for the given provider.
+
+        If a CredentialPool is active, delegates to pool.current().
+        Otherwise returns the primary API key or a stored credential.
+        """
+        if self.active_pool is not None:
+            current = self.active_pool.current()
+            if current is not None:
+                return getattr(current, "access_token", None)
+        if self._primary_api_key:
+            return self._primary_api_key
         return self._credentials.get(provider)
 
     def report_failure(self, provider: str, error: Exception) -> FailoverReason:
-        """Classify error and decide: retry, rotate, or fallback."""
-        # Phase 1: Simple classification. Phase 2: Full error_classifier integration.
+        """Classify error and decide: retry, rotate, or fallback.
+
+        Returns a FailoverReason that the FallbackChain uses to select
+        the next provider. This is a simplified classifier — Phase 5
+        will wire to the full agent/error_classifier.py classify_api_error().
+        """
         error_msg = str(error).lower()
+
+        # Rate limiting
         if "429" in error_msg or "rate" in error_msg:
             return FailoverReason.RATE_LIMITED
+
+        # Auth failures
         if "401" in error_msg or "403" in error_msg or "auth" in error_msg:
             return FailoverReason.AUTH_FAILED
+
+        # Server overloaded
+        if "503" in error_msg or "529" in error_msg or "overload" in error_msg:
+            return FailoverReason.MODEL_OVERLOADED
+
+        # Context too long
+        if "context_length" in error_msg or "context_overflow" in error_msg:
+            return FailoverReason.CONTEXT_TOO_LONG
+
+        # Connection / transport errors
         if "connect" in error_msg or "timeout" in error_msg:
             return FailoverReason.CONNECTION_ERROR
+
         return FailoverReason.UNKNOWN
+
+    def restore_primary(self) -> bool:
+        """Attempt to restore primary provider after fallback.
+
+        Without a pool, there's nothing to restore — always succeeds.
+        With a pool, checks if a primary credential is available.
+        """
+        if self.active_pool is None:
+            return True
+        # With a pool, check if the current entry is available
+        current = self.active_pool.current()
+        return current is not None
