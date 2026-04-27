@@ -286,18 +286,22 @@ class AIAgentCompatShim:
         self._event_bus.subscribe("tool_start", on_step_event)
         self._event_bus.subscribe("tool_end", on_step_event)
 
-    def _make_provider_call(self, api_kwargs: dict) -> Any:
+    def _make_provider_call(self, **kwargs) -> Any:
         """Delegate the API call to the parent AIAgent's proven path.
 
-        Bridges ProviderCallStage.process() → AIAgent._interruptible_streaming_api_call().
-        The result is a SimpleNamespace that mimics the OpenAI response shape.
+        Bridges OpenAICompatibleProvider.execute(**request) →
+        AIAgent._interruptible_streaming_api_call().
+
+        The provider's execute() unpacks the request dict as **kwargs,
+        so we receive them as individual keyword args and repack into
+        a single dict for _interruptible_streaming_api_call().
         """
         if self._agent is None:
             raise RuntimeError("[pipeline] No parent AIAgent for provider call delegation")
 
         logger.info(f"[pipeline] Provider call delegated to AIAgent._interruptible_streaming_api_call")
         result = self._agent._interruptible_streaming_api_call(
-            api_kwargs,
+            kwargs,
             on_first_delta=None,  # Streaming delta wiring comes through EventBus
         )
         return result
