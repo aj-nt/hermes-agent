@@ -118,3 +118,71 @@ def should_sanitize_tool_calls(api_mode: str = None) -> bool:
         bool: True if sanitization is needed (non-Codex API), False otherwise.
     """
     return api_mode != "codex_responses"
+
+
+def anthropic_prompt_cache_policy(
+    provider: str = "",
+    base_url: str = "",
+    api_mode: str = "",
+    model: str = "",
+) -> tuple[bool, bool]:
+    """Decide whether to apply Anthropic prompt caching and which layout to use.
+
+    Returns ``(should_cache, use_native_layout)``:
+      * ``should_cache`` — inject ``cache_control`` breakpoints for this
+        request (applies to OpenRouter Claude, native Anthropic, and
+        third-party gateways that speak the native Anthropic protocol).
+      * ``use_native_layout`` — place markers on the *inner* content
+        blocks (native Anthropic accepts and requires this layout);
+        when False markers go on the message envelope (OpenRouter and
+        OpenAI-wire proxies expect the looser layout).
+
+    Third-party providers using the native Anthropic transport
+    (``api_mode == 'anthropic_messages'`` + Claude-named model) get
+    caching with the native layout so they benefit from the same
+    cost reduction as direct Anthropic callers, provided their
+    gateway implements the Anthropic cache_control contract
+    (MiniMax, Zhipu GLM, LiteLLM's Anthropic proxy mode all do).
+
+    Qwen / Alibaba-family models on OpenCode, OpenCode Go, and direct
+    Alibaba (DashScope) also honour Anthropic-style ``cache_control``
+    markers on OpenAI-wire chat completions. Upstream pi-mono #3392 /
+    pi #3393 documented this for opencode-go Qwen. Without markers
+    these providers serve zero cache hits, re-billing the full prompt
+    on every turn.
+    """
+    base_lower = base_url.lower()
+    model_lower = model.lower()
+    provider_lower = provider.lower()
+    is_claude = "claude" in model_lower
+    is_openrouter = base_url_host_matches(base_url, "openrouter.ai")
+    is_anthropic_wire = api_mode == "anthropic_messages"
+    is_native_anthropic = (
+        is_anthropic_wire
+        and (provider == "anthropic" or base_url_hostname(base_url) == "api.anthropic.com")
+    )
+
+    if is_native_anthropic:
+        return True, True
+    if is_openrouter and is_claude:
+        return True, False
+    if is_anthropic_wire and is_claude:
+        # Third-party Anthropic-compatible gateway.
+        return True, True
+
+    # Qwen/Alibaba on OpenCode (Zen/Go) and native DashScope: OpenAI-wire
+    # transport that accepts Anthropic-style cache_control markers and
+    # rewards them with real cache hits.  Without this branch
+    # qwen3.6-plus on opencode-go reports 0% cached tokens and burns
+    # through the subscription on every turn.
+    model_is_qwen = "qwen" in model_lower
+    provider_is_alibaba_family = provider_lower in {
+        "opencode", "opencode-zen", "opencode-go", "alibaba",
+    }
+    if provider_is_alibaba_family and model_is_qwen:
+        # Envelope layout (native_anthropic=False): markers on inner
+        # content parts, not top-level tool messages.  Matches
+        # pi-mono's "alibaba" cacheControlFormat.
+        return True, False
+
+    return False, False

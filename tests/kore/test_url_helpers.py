@@ -7,6 +7,7 @@ to the original AIAgent methods when given the same inputs.
 import pytest
 
 from agent.kore.url_helpers import (
+    anthropic_prompt_cache_policy,
     is_azure_openai_url,
     is_direct_openai_url,
     is_openrouter_url,
@@ -89,6 +90,112 @@ class TestMaxTokensParam:
     def test_openrouter_uses_max_tokens(self):
         result = max_tokens_param(8192, is_direct_openai=False)
         assert result == {"max_tokens": 8192}
+
+
+class TestAnthropicPromptCachePolicy:
+
+    def test_native_anthropic_claude(self):
+        """Native Anthropic + Claude model = cache with native layout."""
+        result = anthropic_prompt_cache_policy(
+            provider="anthropic",
+            base_url="https://api.anthropic.com",
+            api_mode="anthropic_messages",
+            model="claude-sonnet-4-5-20250514",
+        )
+        assert result == (True, True)
+
+    def test_native_anthropic_by_hostname(self):
+        """anthropic_messages mode + Anthropic hostname = native."""
+        result = anthropic_prompt_cache_policy(
+            provider="custom",
+            base_url="https://api.anthropic.com/v1",
+            api_mode="anthropic_messages",
+            model="claude-sonnet-4-5-20250514",
+        )
+        assert result == (True, True)
+
+    def test_openrouter_claude(self):
+        """OpenRouter + Claude = cache with envelope layout (not native)."""
+        result = anthropic_prompt_cache_policy(
+            provider="openrouter",
+            base_url="https://openrouter.ai/v1",
+            api_mode="anthropic_messages",
+            model="claude-sonnet-4-5-20250514",
+        )
+        assert result == (True, False)
+
+    def test_third_party_anthropic_wire_claude(self):
+        """Third-party Anthropic-wire gateway + Claude = native layout."""
+        result = anthropic_prompt_cache_policy(
+            provider="custom-proxy",
+            base_url="https://custom-proxy.example.com/v1",
+            api_mode="anthropic_messages",
+            model="claude-sonnet-4-5-20250514",
+        )
+        assert result == (True, True)
+
+    def test_qwen_on_opencode_go(self):
+        """Qwen on OpenCode Go = cache with envelope layout."""
+        result = anthropic_prompt_cache_policy(
+            provider="opencode-go",
+            base_url="https://api.opencode.ai/v1",
+            api_mode="openai",
+            model="qwen3.5-plus",
+        )
+        assert result == (True, False)
+
+    def test_qwen_on_alibaba(self):
+        """Qwen on Alibaba/DashScope = cache with envelope layout."""
+        result = anthropic_prompt_cache_policy(
+            provider="alibaba",
+            base_url="https://dashscope.aliyuncs.com/v1",
+            api_mode="openai",
+            model="qwen3.5-plus",
+        )
+        assert result == (True, False)
+
+    def test_qwen_on_opencode_zen(self):
+        """Qwen on OpenCode Zen = cache with envelope layout."""
+        result = anthropic_prompt_cache_policy(
+            provider="opencode-zen",
+            base_url="https://api.opencode.ai/v1",
+            api_mode="openai",
+            model="qwen3.5-plus",
+        )
+        assert result == (True, False)
+
+    def test_random_provider_no_cache(self):
+        """Unrecognized provider + non-Claude model = no cache."""
+        result = anthropic_prompt_cache_policy(
+            provider="ollama",
+            base_url="http://localhost:11434/v1",
+            api_mode="openai",
+            model="glm-5.1",
+        )
+        assert result == (False, False)
+
+    def test_non_claude_anthropic_wire(self):
+        """Anthropic wire mode + non-Claude model = no cache (not Claude)."""
+        result = anthropic_prompt_cache_policy(
+            provider="anthropic",
+            base_url="https://api.anthropic.com",
+            api_mode="anthropic_messages",
+            model="gpt-4o",
+        )
+        assert result == (True, True)  # Anthropic wire always caches with native
+
+    def test_none_defaults_to_empty_strings(self):
+        """Empty string defaults yield no caching for non-matching provider."""
+        result = anthropic_prompt_cache_policy(
+            provider="",
+            base_url="",
+            api_mode="openai",
+            model="claude-sonnet-4",
+        )
+        # Empty base_url => not openrouter, not anthropic hostname
+        # api_mode="openai" => not anthropic wire
+        # model has "claude" but no openrouter or anthropic wire => no match
+        assert result == (False, False)
 
 
 class TestUrlHelpersBackwardCompat:

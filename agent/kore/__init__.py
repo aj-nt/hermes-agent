@@ -68,6 +68,7 @@ from agent.kore.url_helpers import (
     max_tokens_param,
     anthropic_preserve_dots,
     should_sanitize_tool_calls,
+    anthropic_prompt_cache_policy,
 )
 
 from agent.kore.think_blocks import (
