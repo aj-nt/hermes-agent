@@ -464,3 +464,41 @@ class TestFeatureFlagSourceOfTruth:
             "compat.py must reference run_agent.USE_NEW_PIPELINE directly, "
             "not via a copied/stub local variable"
         )
+
+
+# ---------------------------------------------------------------------------
+# Test: _make_provider_call converts SimpleNamespace to dict
+# ---------------------------------------------------------------------------
+
+class TestProviderCallNamespaceConversion:
+    """The _make_provider_call must convert SimpleNamespace results from
+    AIAgent._interruptible_streaming_api_call to dicts, because
+    ResponseProcessingStage expects response dicts, not namespaces."""
+
+    def test_make_provider_call_converts_namespace_to_dict(self):
+        """_make_provider_call result (via ProviderResult.response) must
+        be a dict, not a SimpleNamespace."""
+        from types import SimpleNamespace
+        mock_agent = MagicMock()
+        mock_response = SimpleNamespace(
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(content="Hello!", tool_calls=[]),
+                finish_reason="stop",
+            )],
+            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+            id="chatcmpl-123",
+            model="test-model",
+        )
+        mock_agent._interruptible_streaming_api_call.return_value = mock_response
+
+        shim = AIAgentCompatShim(
+            model="test-model",
+            parent_agent=mock_agent,
+            registry=ProviderRegistry(),
+        )
+        result = shim._make_provider_call(model="test-model", messages=[{"role": "user", "content": "hi"}])
+        assert isinstance(result, dict), (
+            f"_make_provider_call must return a dict for ResponseProcessingStage, "
+            f"got {type(result).__name__}: {result}"
+        )
+        assert "choices" in result, "Converted dict must contain 'choices' key"

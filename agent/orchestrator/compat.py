@@ -84,6 +84,8 @@ def _get_finish_reason(result: Any) -> str:
         return "stop"
 
 
+
+
 class AIAgentCompatShim:
     """Compatibility shim that maps the AIAgent external API to Orchestrator.
 
@@ -295,16 +297,22 @@ class AIAgentCompatShim:
         The provider's execute() unpacks the request dict as **kwargs,
         so we receive them as individual keyword args and repack into
         a single dict for _interruptible_streaming_api_call().
+
+        Returns a dict (not SimpleNamespace) so ResponseProcessingStage
+        can use .get() on the response.
         """
         if self._agent is None:
             raise RuntimeError("[pipeline] No parent AIAgent for provider call delegation")
 
-        logger.info(f"[pipeline] Provider call delegated to AIAgent._interruptible_streaming_api_call")
-        result = self._agent._interruptible_streaming_api_call(
+        logger.info("[pipeline] Provider call delegated to AIAgent._interruptible_streaming_api_call")
+        raw_result = self._agent._interruptible_streaming_api_call(
             kwargs,
             on_first_delta=None,  # Streaming delta wiring comes through EventBus
         )
-        return result
+        # Convert SimpleNamespace response to dict for ResponseProcessingStage
+        if isinstance(raw_result, dict):
+            return raw_result
+        return _namespace_to_dict(raw_result)
 
     def _dispatch_tool(self, name: str, args: dict) -> str:
         """Delegate tool dispatch to model_tools.handle_function_call.
