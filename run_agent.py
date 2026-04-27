@@ -144,6 +144,18 @@ from utils import atomic_json_write, base_url_host_matches, base_url_hostname, e
 # AIAgent code runs unchanged — safe cutover per DESIGN.md Phase 6.
 USE_NEW_PIPELINE: bool = False
 
+# DEAD_CODE_RANGES_WHEN_PIPELINE_ACTIVE: line ranges unreachable when
+# USE_NEW_PIPELINE is True. Used by Phase 6B-2 for safe bulk removal.
+# Format: (method_name, dead_code_start_line, dead_code_end_line, lines_count)
+# switch_model:      L1828-L1993  (166 lines)   old client-swap logic
+# interrupt:         L2886-L2929  (44 lines)    old interrupt signal propagation
+# run_conversation: L7516-L10913 (3398 lines) old agent loop
+DEAD_CODE_RANGES_WHEN_PIPELINE_ACTIVE = {
+    "switch_model":      (1828, 1993, 166),
+    "interrupt":         (2886, 2929, 44),
+    "run_conversation": (7516, 10913, 3398),
+}
+
 
 class _SafeWriter:
     """Transparent stdio wrapper that catches OSError/ValueError from broken pipes.
@@ -1809,6 +1821,10 @@ class AIAgent:
             return self._new_pipeline.switch_model(new_model, new_provider, api_key=api_key, base_url=base_url, api_mode=api_mode)
         # --- End Phase 6 delegation ---
 
+        # [PIPELINE-DEAD-CODE] Lines 1828-1993: old switch_model client-swap logic (166 lines).
+        # When USE_NEW_PIPELINE is True, the delegation above returns early.
+        # Everything below is unreachable. Remove in Phase 6B-2.
+
         from hermes_cli.providers import determine_api_mode
 
         # ── Determine api_mode if not provided ──
@@ -2862,6 +2878,10 @@ class AIAgent:
         if USE_NEW_PIPELINE and getattr(self, "_new_pipeline", None) is not None:
             return self._new_pipeline.interrupt(message)
         # --- End Phase 6 delegation ---
+
+        # [PIPELINE-DEAD-CODE] Lines 2886-2929: old interrupt signal propagation (44 lines).
+        # When USE_NEW_PIPELINE is True, the delegation above returns early.
+        # Everything below is unreachable. Remove in Phase 6B-2.
 
         self._interrupt_requested = True
         self._interrupt_message = message
@@ -7488,6 +7508,10 @@ class AIAgent:
                 kwargs["system_message"] = system_message
             return self._new_pipeline.run_conversation(user_message, **kwargs)
         # --- End Phase 6 delegation ---
+
+        # [PIPELINE-DEAD-CODE] Lines 7516-10913: entire old agent loop (3398 lines).
+        # When USE_NEW_PIPELINE is True, the delegation above returns early.
+        # Everything below in this method is unreachable. Remove in Phase 6B-2.
 
         # Guard stdio against OSError from broken pipes (systemd/headless/daemon).
         # Installed once, transparent when streams are healthy, prevents crash on write.
