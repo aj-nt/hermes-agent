@@ -331,6 +331,8 @@ class AIAgentCompatShim:
             task_id=task_id,
             session_id=self.session_id,
         )
+        # Record tool use for nudge tracking
+        self.memory.record_tool_use(name)
         return result
 
     def _prepare_request(self, ctx: ConversationContext) -> "PreparedRequest":
