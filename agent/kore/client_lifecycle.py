@@ -4,6 +4,7 @@ Extracted from run_agent.py to decouple TCP keepalive, socket management,
 and proxy configuration from the AIAgent god-object.
 
 Layer 1 extraction: pure static functions with no self.* references.
+
 """
 
 import httpx
@@ -11,6 +12,7 @@ import logging
 import socket
 from typing import Any, Optional
 from unittest.mock import Mock
+from utils import base_url_hostname
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +37,7 @@ def _get_proxy_from_env() -> Optional[str]:
 def _get_proxy_for_base_url(base_url: Optional[str]) -> Optional[str]:
     """Return an env-configured proxy unless NO_PROXY excludes this base URL."""
     import urllib.request
-    from utils import base_url_hostname
-
+    
     proxy = _get_proxy_from_env()
     if not proxy or not base_url:
         return proxy
@@ -243,3 +244,4 @@ def cleanup_dead_connections(client) -> bool:
     except Exception as exc:
         logger.debug("Dead connection check error: %s", exc)
     return False
+

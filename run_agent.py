@@ -472,6 +472,7 @@ from agent.kore.display_utils import (
 )
 
 from agent.kore.url_helpers import (
+    is_azure_openai_url as _kore_is_azure_openai_url,
     is_direct_openai_url as _kore_is_direct_openai_url,
     is_openrouter_url as _kore_is_openrouter_url,
     is_qwen_portal as _kore_is_qwen_portal,
@@ -2360,20 +2361,7 @@ class AIAgent:
         return _kore_is_direct_openai_url(base_url=base_url, base_url_lower=self._base_url_lower, base_url_hostname_val=self._base_url_hostname if hasattr(self, "_base_url_hostname") else "")
 
     def _is_azure_openai_url(self, base_url: str = None) -> bool:
-        """Return True when a base URL targets Azure OpenAI.
-
-        Azure OpenAI exposes an OpenAI-compatible endpoint at
-        ``{resource}.openai.azure.com/openai/v1`` that accepts the
-        standard ``openai`` Python client.  Unlike api.openai.com it
-        does NOT support the Responses API — gpt-5.x models are served
-        on the regular ``/chat/completions`` path — so routing decisions
-        must treat Azure separately from direct OpenAI.
-        """
-        if base_url is not None:
-            url = str(base_url).lower()
-        else:
-            url = getattr(self, "_base_url_lower", "") or ""
-        return "openai.azure.com" in url
+        return _kore_is_azure_openai_url(base_url=base_url, base_url_lower=getattr(self, "_base_url_lower", ""))
 
     def _resolved_api_call_timeout(self) -> float:
         """Resolve the effective per-call request timeout in seconds.

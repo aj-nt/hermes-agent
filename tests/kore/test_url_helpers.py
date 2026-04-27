@@ -7,11 +7,34 @@ to the original AIAgent methods when given the same inputs.
 import pytest
 
 from agent.kore.url_helpers import (
+    is_azure_openai_url,
     is_direct_openai_url,
     is_openrouter_url,
     is_qwen_portal,
     max_tokens_param,
 )
+
+
+class TestIsAzureOpenaiUrl:
+
+    def test_azure_url(self):
+        assert is_azure_openai_url(base_url="https://myresource.openai.azure.com/openai/v1") is True
+
+    def test_non_azure_url(self):
+        assert is_azure_openai_url(base_url="https://api.openai.com/v1") is False
+
+    def test_local_url_not_azure(self):
+        assert is_azure_openai_url(base_url="http://localhost:11434/v1") is False
+
+    def test_none_base_url_with_cached_lower(self):
+        assert is_azure_openai_url(base_url=None, base_url_lower="https://myresource.openai.azure.com/openai/v1") is True
+
+    def test_none_base_url_empty_cached(self):
+        assert is_azure_openai_url(base_url=None, base_url_lower="") is False
+
+    def test_explicit_url_overrides_cached(self):
+        """When base_url is provided, it takes priority over base_url_lower."""
+        assert is_azure_openai_url(base_url="https://api.openai.com/v1", base_url_lower="https://myresource.openai.azure.com/") is False
 
 
 class TestIsDirectOpenaiUrl:
@@ -79,6 +102,11 @@ class TestUrlHelpersBackwardCompat:
         assert is_direct_openai_url(base_url=None, base_url_hostname_val="api.openai.com") is True
         # Not OpenAI
         assert is_direct_openai_url(base_url="https://openrouter.ai/v1") is False
+
+    def test_is_azure_openai_matches(self):
+        assert is_azure_openai_url(base_url="https://myresource.openai.azure.com/openai/v1") is True
+        assert is_azure_openai_url(base_url="https://api.openai.com/v1") is False
+        assert is_azure_openai_url(base_url=None, base_url_lower="https://myresource.openai.azure.com/openai/v1") is True
 
     def test_is_openrouter_matches(self):
         assert is_openrouter_url("https://openrouter.ai/v1") is True
