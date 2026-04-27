@@ -177,9 +177,11 @@ class MemoryCoordinator:
     Phase 2: Connect to existing MemoryStore and MemoryManager.
     """
 
-    def __init__(self, session_id: str = "") -> None:
+    def __init__(self, session_id: str = "", *, nudge_interval: int = 10, skill_interval: int = 10) -> None:
         self._session_id = session_id
-        self.nudge_tracker: NudgeTracker = NudgeTracker()
+        self.nudge_tracker: NudgeTracker = NudgeTracker(
+            nudge_interval=nudge_interval, skill_interval=skill_interval
+        )
         self.write_metadata: WriteMetadataTracker = WriteMetadataTracker(
             session_id=session_id
         )
@@ -247,13 +249,29 @@ class MemoryCoordinator:
 
     def get_tool_schemas(self) -> list[dict]:
         """Return all memory tool schemas (built-in + external)."""
-        return []  # Phase 2
+        schemas: list[dict] = []
+        if self.store is not None and self._memory_enabled:
+            store_schema = self.store.get_tool_schema()
+            if store_schema:
+                schemas.append(store_schema)
+        if self.manager is not None:
+            for schema in self.manager.get_all_tool_schemas():
+                schemas.append(schema)
+        return schemas
 
     def handle_tool_call(
         self, tool_name: str, args: dict, *, metadata: dict
     ) -> str:
-        """Route tool calls to built-in or external handler."""
-        raise NotImplementedError("Phase 2")
+        """Route tool calls to built-in or external handler.
+        
+        Memory tool (add/replace/delete/search/consolidate) goes to store.
+        External memory tools go to manager if manager.has_tool() returns True.
+        """
+        if tool_name == "memory" and self.store is not None:
+            return self.store.handle_tool_call(tool_name, args, metadata)
+        if self.manager is not None and self.manager.has_tool(tool_name):
+            return self.manager.handle_tool_call(tool_name, args)
+        raise ValueError(f"Unknown memory tool: {tool_name}")
 
     def should_nudge(self) -> Optional[str]:
         """Return nudge text if memory/skill nudge is due, else None."""
