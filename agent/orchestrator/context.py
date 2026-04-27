@@ -232,6 +232,9 @@ class SessionState:
     steer_buffer: Optional[str] = None
     iteration_count: int = 0
     api_call_count: int = 0
+    total_tokens: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
 
     # --- Rate Limits ---
     rate_limits: Any = None            # RateLimitState

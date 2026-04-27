@@ -121,11 +121,19 @@ class RequestPrepStage:
 
     name: str = "request_prep"
 
-    def __init__(self, model_name: str = "default-model") -> None:
+    def __init__(self, model_name: str = "default-model", prepare_fn: Optional[Callable] = None) -> None:
         self._model_name = model_name
+        self._prepare_fn = prepare_fn
 
     def process(self, ctx: ConversationContext) -> PreparedRequest:
-        """Build a PreparedRequest from the conversation context."""
+        """Build a PreparedRequest from the conversation context.
+
+        If a prepare_fn was injected, delegate to it (battle-test wiring).
+        Otherwise use the default logic.
+        """
+        if self._prepare_fn is not None:
+            return self._prepare_fn(ctx)
+
         messages = list(ctx.messages)
 
         # Prepend system prompt
