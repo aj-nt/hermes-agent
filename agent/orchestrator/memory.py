@@ -211,15 +211,20 @@ class MemoryCoordinator:
         self, user_msg: str, assistant_msg: str, *, interrupted: bool = False
     ) -> None:
         """Sync turn to external providers, prefetch for next turn."""
-        pass  # Phase 2
+        if self.manager is not None and not interrupted and user_msg and assistant_msg:
+            self.manager.sync_all(user_msg, assistant_msg)
+            self.manager.queue_prefetch_all(user_msg)
 
     def on_session_end(self, messages: list) -> None:
         """Final extraction pass. Does NOT tear down providers."""
-        pass  # Phase 2
+        if self.manager is not None:
+            self.manager.on_session_end(messages or [])
 
     def shutdown(self, messages: Optional[list] = None) -> None:
         """End-of-session extraction + full provider teardown."""
-        pass  # Phase 2
+        if self.manager is not None:
+            self.manager.on_session_end(messages or [])
+            self.manager.shutdown_all()
 
     # --- System Prompt ---
 
