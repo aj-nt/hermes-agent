@@ -18,6 +18,7 @@ import json
 import pytest
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
+import run_agent
 
 from agent.orchestrator.context import (
     ConversationContext,
@@ -259,23 +260,23 @@ class TestFeatureFlag:
     """USE_NEW_PIPELINE controls whether the shim routes through Orchestrator."""
 
     def test_feature_flag_exists(self):
-        from agent.orchestrator.compat import USE_NEW_PIPELINE
+        from run_agent import USE_NEW_PIPELINE
         assert isinstance(USE_NEW_PIPELINE, bool)
 
     def test_feature_flag_default_false(self):
         """By default, the new pipeline is OFF — safe cutover."""
-        from agent.orchestrator.compat import USE_NEW_PIPELINE
+        from run_agent import USE_NEW_PIPELINE
         assert USE_NEW_PIPELINE is False
 
     def test_feature_flag_can_be_overridden(self):
         """Tests can override the feature flag via monkeypatch."""
         import agent.orchestrator.compat as compat_module
-        original = compat_module.USE_NEW_PIPELINE
+        original = run_agent.USE_NEW_PIPELINE
         try:
-            compat_module.USE_NEW_PIPELINE = True
-            assert compat_module.USE_NEW_PIPELINE is True
+            run_agent.USE_NEW_PIPELINE = True
+            assert run_agent.USE_NEW_PIPELINE is True
         finally:
-            compat_module.USE_NEW_PIPELINE = original
+            run_agent.USE_NEW_PIPELINE = original
 
 
 # ============================================================================
@@ -296,13 +297,13 @@ class TestShimRouting:
 
         # Monkeypatch the feature flag
         import agent.orchestrator.compat as compat_module
-        original_flag = compat_module.USE_NEW_PIPELINE
+        original_flag = run_agent.USE_NEW_PIPELINE
         try:
-            compat_module.USE_NEW_PIPELINE = True
+            run_agent.USE_NEW_PIPELINE = True
             result = shim.chat("Hello")
             assert isinstance(result, str)
         finally:
-            compat_module.USE_NEW_PIPELINE = original_flag
+            run_agent.USE_NEW_PIPELINE = original_flag
 
     def test_run_conversation_returns_dict(self):
         from agent.orchestrator.compat import AIAgentCompatShim
@@ -316,14 +317,14 @@ class TestShimRouting:
         shim._resolve_provider_name = lambda ctx: "mock"
 
         import agent.orchestrator.compat as compat_module
-        original_flag = compat_module.USE_NEW_PIPELINE
+        original_flag = run_agent.USE_NEW_PIPELINE
         try:
-            compat_module.USE_NEW_PIPELINE = True
+            run_agent.USE_NEW_PIPELINE = True
             result = shim.run_conversation("Hello")
             assert isinstance(result, dict)
             assert "final_response" in result
         finally:
-            compat_module.USE_NEW_PIPELINE = original_flag
+            run_agent.USE_NEW_PIPELINE = original_flag
 
 
 # ============================================================================

@@ -86,13 +86,13 @@ class TestAIAgentInitPipelineConstruction:
         shim._resolve_provider_name = lambda ctx: "mock"
 
         import agent.orchestrator.compat as compat_module
-        original = compat_module.USE_NEW_PIPELINE
+        original = run_agent.USE_NEW_PIPELINE
         try:
-            compat_module.USE_NEW_PIPELINE = True
+            run_agent.USE_NEW_PIPELINE = True
             result = shim.chat("Hello")
             assert result == "Pipeline response"
         finally:
-            compat_module.USE_NEW_PIPELINE = original
+            run_agent.USE_NEW_PIPELINE = original
 
     def test_pipeline_delegates_interrupt(self):
         """_new_pipeline.interrupt() sets the interrupt event."""

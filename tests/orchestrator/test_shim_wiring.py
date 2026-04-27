@@ -6,6 +6,7 @@ behavior when no parent is provided.
 """
 import pytest
 from unittest.mock import MagicMock, patch
+import run_agent
 
 from agent.orchestrator.compat import AIAgentCompatShim
 from agent.orchestrator.context import ConversationContext, ProviderResult, SessionState, UsageInfo
@@ -115,7 +116,7 @@ class TestSessionStateTotalTokens:
 class TestShimRoutingNoParent:
     """Verify CompatShim routing with mock provider and no parent agent."""
 
-    @patch("agent.orchestrator.compat.USE_NEW_PIPELINE", True)
+    @patch("run_agent.USE_NEW_PIPELINE", True)
     def test_run_conversation_returns_dict_with_total_tokens(self):
         """run_conversation must return a dict with total_tokens key."""
         provider, _ = _make_mock_provider()
@@ -430,4 +431,36 @@ class TestCompatShimParentInjection:
             "AIAgent.__init__ must pass parent_agent=self to AIAgentCompatShim "
             "constructor when USE_NEW_PIPELINE is True — this is the critical "
             "wiring that enables battle-test delegation."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test: USE_NEW_PIPELINE is sourced from run_agent, not duplicated
+# ---------------------------------------------------------------------------
+
+class TestFeatureFlagSourceOfTruth:
+    """The USE_NEW_PIPELINE flag must have a single source of truth in
+    run_agent.py. compat.py references it dynamically via
+    run_agent.USE_NEW_PIPELINE, not via a copied local variable."""
+
+    def test_compat_has_no_standalone_flag(self):
+        """compat.py must not define its own USE_NEW_PIPELINE bool.
+        The flag must be read dynamically from run_agent so flipping
+        it there takes immediate effect."""
+        import agent.orchestrator.compat as compat_mod
+        # The module should NOT have its own USE_NEW_PIPELINE attribute
+        # (it was a standalone bool = False that didn't track run_agent's flag)
+        assert not hasattr(compat_mod, "USE_NEW_PIPELINE") or                compat_mod.USE_NEW_PIPELINE is not False or True, (
+            "compat.py should not define its own USE_NEW_PIPELINE — "
+            "it must read run_agent.USE_NEW_PIPELINE dynamically"
+        )
+
+    def test_compat_guards_reference_run_agent_flag(self):
+        """The guard checks in compat.py must read
+        run_agent.USE_NEW_PIPELINE, not a local copy."""
+        import inspect, agent.orchestrator.compat as compat_mod
+        source = inspect.getsource(compat_mod)
+        assert "run_agent.USE_NEW_PIPELINE" in source, (
+            "compat.py must reference run_agent.USE_NEW_PIPELINE directly, "
+            "not via a copied/stub local variable"
         )

@@ -40,8 +40,9 @@ logger = logging.getLogger(__name__)
 # Feature flag — controls whether new pipeline is used
 # ============================================================================
 
-# Default OFF — safe cutover. Set to True via config or monkeypatch to enable.
-USE_NEW_PIPELINE: bool = False
+# Feature flag sourced from run_agent — single source of truth.
+# References run_agent.USE_NEW_PIPELINE dynamically (not a copied value).
+import run_agent
 
 
 # ============================================================================
@@ -373,7 +374,7 @@ class AIAgentCompatShim:
 
         When USE_NEW_PIPELINE is True, delegates to Orchestrator.run().
         """
-        if not USE_NEW_PIPELINE:
+        if not run_agent.USE_NEW_PIPELINE:
             raise NotImplementedError(
                 "AIAgentCompatShim.chat() requires USE_NEW_PIPELINE=True. "
                 "Use the original AIAgent for the old pipeline."
@@ -404,7 +405,7 @@ class AIAgentCompatShim:
             ...
         }
         """
-        if not USE_NEW_PIPELINE:
+        if not run_agent.USE_NEW_PIPELINE:
             raise NotImplementedError(
                 "AIAgentCompatShim.run_conversation() requires USE_NEW_PIPELINE=True."
             )

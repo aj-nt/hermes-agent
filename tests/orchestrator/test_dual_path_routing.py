@@ -126,14 +126,14 @@ class TestChatDualPath:
         shim._resolve_provider_name = lambda ctx: "mock"
 
         import agent.orchestrator.compat as compat_module
-        original_flag = compat_module.USE_NEW_PIPELINE
+        original_flag = run_agent.USE_NEW_PIPELINE
         try:
-            compat_module.USE_NEW_PIPELINE = True
+            run_agent.USE_NEW_PIPELINE = True
             result = shim.chat("Hello")
             assert isinstance(result, str)
             assert "Hello from new pipeline" in result
         finally:
-            compat_module.USE_NEW_PIPELINE = original_flag
+            run_agent.USE_NEW_PIPELINE = original_flag
 
 
 # ============================================================================
@@ -169,16 +169,16 @@ class TestRunConversationDualPath:
         shim._resolve_provider_name = lambda ctx: "mock"
 
         import agent.orchestrator.compat as compat_module
-        original_flag = compat_module.USE_NEW_PIPELINE
+        original_flag = run_agent.USE_NEW_PIPELINE
         try:
-            compat_module.USE_NEW_PIPELINE = True
+            run_agent.USE_NEW_PIPELINE = True
             result = shim.run_conversation("Tell me about Python")
             assert isinstance(result, dict)
             assert "final_response" in result
             assert "iterations" in result
             assert "interrupted" in result
         finally:
-            compat_module.USE_NEW_PIPELINE = original_flag
+            run_agent.USE_NEW_PIPELINE = original_flag
 
 
 # ============================================================================
