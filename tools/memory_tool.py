@@ -77,7 +77,12 @@ QUIRK_INACTIVITY_THRESHOLD = 60 * 24 * 3600
 QUIRK_MIN_ACCESS_FOR_KEEP = 2
 
 # Hot memory: minimum priority to be considered for injection
-HOT_MIN_PRIORITY = 4
+# NOTE: Priority 2 is the default from migration/classification. Setting
+# this to 4 excluded nearly all real content from the hot block — the agent
+# started every session knowing nothing about the user or environment.
+# Priority 4 entries load first (sorted by priority DESC), then 3, then 2
+# until the char budget is full. Char limits (3000/1500) handle truncation.
+HOT_MIN_PRIORITY = 2
 
 # ---------------------------------------------------------------------------
 # Security scanning — injection/exfiltration detection
@@ -940,7 +945,7 @@ class MemoryStore:
     def _build_hot_block(self, target: str) -> str:
         """Select entries for hot injection and render as a text block.
         
-        Priority >= 3, ordered by priority DESC then last_accessed DESC,
+        Priority >= HOT_MIN_PRIORITY, ordered by priority DESC then last_accessed DESC,
         truncated to char limit.
         """
         try:
