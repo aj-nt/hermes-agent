@@ -273,6 +273,9 @@ class MemoryStore:
         - Bare tokens containing : or other FTS5-special chars are wrapped in
           double quotes (e.g. layer:4 -> "layer:4").
         - Single bare words are kept as-is for normal token matching.
+        - Multi-word queries WITHOUT explicit boolean operators default to OR
+          (match any term), since that's almost always what the agent wants
+          when searching memory. Explicit AND/NOT/NEAR are preserved.
         """
         import re
         FTS5_OPERATORS = {'OR', 'AND', 'NOT', 'NEAR'}
@@ -280,6 +283,7 @@ class MemoryStore:
         # regex captures: quoted groups OR individual tokens
         tokens = re.findall(r'"[^"]*"|\S+', query)
         result_parts = []
+        has_boolean_operator = False
         for tok in tokens:
             # Already a quoted phrase — keep as-is
             if tok.startswith('"') and tok.endswith('"'):
@@ -287,6 +291,7 @@ class MemoryStore:
                 continue
             # FTS5 boolean operator
             if tok.upper() in FTS5_OPERATORS:
+                has_boolean_operator = True
                 result_parts.append(tok)
                 continue
             # Needs quoting if it contains colons, parens, asterisks, ^ etc.
@@ -298,6 +303,17 @@ class MemoryStore:
                 continue
             # Bare word — pass through as-is for normal FTS5 token matching
             result_parts.append(tok)
+        # If there are multiple content tokens and no explicit boolean operator,
+        # insert OR between them so multi-word queries match any term (not all).
+        # FTS5 defaults to AND, but memory search almost always wants OR semantics.
+        if not has_boolean_operator and len(result_parts) > 1:
+            # Insert OR between every pair of non-operator tokens / quoted phrases
+            joined = []
+            for part in result_parts:
+                if joined and joined[-1] != 'OR':
+                    joined.append('OR')
+                joined.append(part)
+            result_parts = joined
         return ' '.join(result_parts) if result_parts else query
     
     def _execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
@@ -816,9 +832,16 @@ class MemoryStore:
             
             # If FTS5 returns nothing, fall back to LIKE for partial matching.
             # Split on OR/AND to search each term individually.
+            # If no boolean operators were present, also split on whitespace
+            # (matching _sanitize_fts5_query's auto-OR behavior).
             if not results and query:
                 import re as _re
                 raw_terms = _re.split(r'\s+(?:OR|AND)\s+', query, flags=_re.IGNORECASE)
+                # If the split produced only one term with multiple words
+                # (no explicit operators), split on whitespace so each word
+                # gets a separate LIKE clause — consistent with auto-OR.
+                if len(raw_terms) == 1 and ' ' in raw_terms[0].strip():
+                    raw_terms = raw_terms[0].strip().split()
                 like_sql = """
                     SELECT id, target, category, key, content, priority,
                            created_at, updated_at, last_accessed, access_count
@@ -1028,7 +1051,9 @@ def memory_tool(
       add       — Add a new entry (use key for upsert, category/priority optional)
       replace   — Replace entry by old_text or key
       remove    — Remove entry by old_text or key
-      search    — FTS5 search across memories (query param)
+      search    — FTS5 search across memories (query param). Multi-word queries
+                  default to OR (match any term). Use AND/NOT/quoted phrases for
+                  stricter matching.
       consolidate — Run eviction/expiry (called at session end)
 
     Returns JSON string with results.
@@ -1111,7 +1136,9 @@ MEMORY_SCHEMA = {
         "  add         — Save a new memory entry. Use key for updatable entries.\n"
         "  replace     — Update an existing entry by old_text or key.\n"
         "  remove      — Delete an entry by old_text or key.\n"
-        "  search      — FTS5 search across memories (query required).\n"
+        "  search      — FTS5 full-text search across memories (query required).\n"
+        "                Multi-word queries default to OR (match any term). Use\n"
+        "                AND/NOT for stricter matching, quote phrases for exact.\n"
         "  consolidate — Run eviction/expiry (auto-called at session end).\n\n"
         "TWO TARGETS:\n"
         "  'user'    → who the user is — name, role, preferences, communication style, pet peeves\n"
@@ -1156,7 +1183,7 @@ MEMORY_SCHEMA = {
             },
             "query": {
                 "type": "string",
-                "description": "Search query for 'search' action. FTS5 full-text search."
+                "description": "Search query for 'search' action. FTS5 syntax supported. Multi-word queries default to OR (match any term). Use AND/NOT for stricter matching, or quote phrases for exact match."
             },
         },
         "required": ["action", "target"],
