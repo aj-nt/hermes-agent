@@ -940,3 +940,59 @@ class TestFirstDeltaCallback:
         # Should NOT raise
         result = executor.execute_streaming({"model": "gpt-4o", "messages": []})
         assert result.content == "Hello"
+class TestOnClientCreatedCallback:
+    """Verify that on_client_created is called when the executor creates a client."""
+
+    def test_on_client_created_called_with_client(self):
+        """on_client_created should receive the per-request OpenAI client."""
+        from agent.orchestrator.provider_adapters import (
+            StreamingChatCompletionsExecutor,
+            StreamCallbacks,
+            RequestConfig,
+        )
+        captured_client = []
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = MockStream([])
+        callbacks = StreamCallbacks(
+            on_client_created=lambda client: captured_client.append(client),
+        )
+        executor = StreamingChatCompletionsExecutor(
+            client_factory=lambda: mock_client,
+            close_client_fn=lambda c: None,
+            request_config=RequestConfig(model="test-model"),
+            base_url="https://api.openai.com",
+            callbacks=callbacks,
+            interrupt_check=lambda: False,
+        )
+        result = executor.execute_streaming({"model": "test-model"})
+        assert len(captured_client) == 1
+        assert captured_client[0] is mock_client
+
+    def test_request_client_available_during_streaming(self):
+        """request_client should be set during streaming and cleared after."""
+        from agent.orchestrator.provider_adapters import (
+            StreamingChatCompletionsExecutor,
+            StreamCallbacks,
+            RequestConfig,
+        )
+        clients_during_stream = []
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = MockStream([])
+        def client_factory():
+            return mock_client
+        callbacks = StreamCallbacks(
+            on_client_created=lambda client: clients_during_stream.append(client),
+        )
+        executor = StreamingChatCompletionsExecutor(
+            client_factory=client_factory,
+            close_client_fn=lambda c: None,
+            request_config=RequestConfig(model="test-model"),
+            base_url="https://api.openai.com",
+            callbacks=callbacks,
+            interrupt_check=lambda: False,
+        )
+        result = executor.execute_streaming({"model": "test-model"})
+        # Client should have been captured during streaming
+        assert len(clients_during_stream) == 1
+        # After streaming completes, request_client is cleared
+        assert executor.request_client is None

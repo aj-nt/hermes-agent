@@ -419,6 +419,7 @@ class StreamCallbacks:
     tool_gen_started: Optional[Callable[[str], None]] = None
     first_delta: Optional[Callable[[], None]] = None
     activity_touch: Optional[Callable[[str], None]] = None
+    on_client_created: Optional[Callable[[Any], None]] = None
 
 
 @dataclass
@@ -541,6 +542,10 @@ class StreamingChatCompletionsExecutor:
         self._is_local = is_local
         self._model = model
         self._capture_rate_limits_fn = capture_rate_limits_fn
+        # The per-request OpenAI client, set during execute_streaming()
+        # and cleared in the finally block.  External code (e.g. the
+        # stale-stream detector) can read this during streaming.
+        self.request_client: Any = None
 
     @classmethod
     def from_agent(cls, agent: Any) -> "StreamingChatCompletionsExecutor":
@@ -648,8 +653,12 @@ class StreamingChatCompletionsExecutor:
             ),
         }
 
-        # Create per-request client
-        request_client = self._client_factory()
+        # Create per-request client and expose for stale-stream detector
+        self.request_client = self._client_factory()
+        request_client = self.request_client
+        # Notify outer scope (e.g. stale-stream detector) of the new client
+        if self._callbacks.on_client_created is not None:
+            self._callbacks.on_client_created(self.request_client)
         try:
             stream = request_client.chat.completions.create(**stream_kwargs)
 
@@ -810,7 +819,8 @@ class StreamingChatCompletionsExecutor:
                     usage_obj = chunk.usage
 
         finally:
-            # Always close the per-request client
+            # Clear the exposed client reference and close it
+            self.request_client = None
             self._close_client_fn(request_client)
 
         # Build the StreamResult
