@@ -407,6 +407,31 @@ class TestMemoryStoreConsolidate:
         rows = store._query("SELECT * FROM memories WHERE key = ?", ("forever",))
         assert len(rows) == 1
 
+    def test_consolidate_syncs_to_flat_files(self, store, tmp_path):
+        """consolidate() should sync SQLite contents back to flat files."""
+        mem_dir = tmp_path / "memories"
+        mem_dir.mkdir()
+
+        store.add("memory", "Entry to sync back", category="environment", key="sync_entry")
+        store.add("user", "User entry to sync", category="user", key="sync_user")
+
+        import tools.memory_tool as mt
+        original_get = mt.get_memory_dir
+        mt.get_memory_dir = lambda: mem_dir
+        try:
+            result = store.consolidate()
+        finally:
+            mt.get_memory_dir = original_get
+
+        # consolidate should report synced_to_files
+        assert result["stats"].get("synced_to_files") is True
+
+        # Flat files should contain the entries
+        memory_md = (mem_dir / "MEMORY.md").read_text(encoding="utf-8")
+        assert "Entry to sync back" in memory_md
+        user_md = (mem_dir / "USER.md").read_text(encoding="utf-8")
+        assert "User entry to sync" in user_md
+
 
 # ---------------------------------------------------------------------------
 # Hot memory injection
@@ -585,6 +610,148 @@ class TestMigrationFromFiles:
         store._migrate_from_files()
         rows_after = store._query("SELECT * FROM memories")
         assert len(rows_after) == 0  # Entry stays deleted, not re-migrated
+    
+    def test_recover_from_empty_table_with_flat_files(self, store, tmp_path):
+        """If memories table is empty but migration flag is set (DB corruption,
+        schema rebuild), re-migrate from flat files to recover data."""
+        mem_dir = tmp_path / "memories"
+        mem_dir.mkdir()
+        (mem_dir / "MEMORY.md").write_text(
+            "Recovery entry one\n§\nRecovery entry two\n"
+        )
+        (mem_dir / "USER.md").write_text("Recovery user entry\n")
+        
+        # Run initial migration
+        import tools.memory_tool as mt
+        original_get = mt.get_memory_dir
+        mt.get_memory_dir = lambda: mem_dir
+        try:
+            store._migrated = False
+            store._migrate_from_files()
+        finally:
+            mt.get_memory_dir = original_get
+        
+        # Verify entries were migrated
+        rows = store._query("SELECT * FROM memories")
+        assert len(rows) >= 3  # 2 memory + 1 user
+        
+        # Verify migration flag is set
+        flag = store._query_one("SELECT value FROM state_meta WHERE key = 'memories_migrated'")
+        assert flag[0] == "1"
+        
+        # Simulate catastrophic DB loss: delete all memories
+        store._execute("DELETE FROM memories")
+        rows_empty = store._query("SELECT * FROM memories")
+        assert len(rows_empty) == 0
+        
+        # Re-run migration: should detect empty table and re-migrate
+        store._migrated = False
+        mt.get_memory_dir = lambda: mem_dir
+        try:
+            store._migrate_from_files()
+        finally:
+            mt.get_memory_dir = original_get
+        
+        # Entries should be recovered from flat files
+        rows_recovered = store._query("SELECT * FROM memories")
+        assert len(rows_recovered) >= 3
+    
+    def test_no_recovery_without_flat_files(self, store, tmp_path):
+        """If table is empty, migration flag is set, and no flat files exist,
+        there's nothing to recover from — stay empty."""
+        mem_dir = tmp_path / "memories"
+        mem_dir.mkdir()
+        # No MEMORY.md or USER.md
+        
+        # Set migration flag manually
+        store._execute(
+            "INSERT OR REPLACE INTO state_meta (key, value) VALUES ('memories_migrated', '1')"
+        )
+        
+        store._migrated = False
+        import tools.memory_tool as mt
+        original_get = mt.get_memory_dir
+        mt.get_memory_dir = lambda: mem_dir
+        try:
+            store._migrate_from_files()
+        finally:
+            mt.get_memory_dir = original_get
+        
+        # Still empty — no flat files to recover from
+        rows = store._query("SELECT * FROM memories")
+        assert len(rows) == 0
+
+
+class TestFileSync:
+    """Tests for _sync_to_files (SQLite → flat file backup)."""
+
+    def test_sync_writes_memory_md(self, store, tmp_path):
+        """_sync_to_files writes current SQLite contents to MEMORY.md."""
+        mem_dir = tmp_path / "memories"
+        mem_dir.mkdir()
+        
+        store.add("memory", "Test memory entry alpha", category="environment", key="test_alpha")
+        store.add("memory", "Test memory entry beta", category="quirk", key="test_beta")
+        store.add("user", "Test user entry", category="user", key="test_user")
+        
+        import tools.memory_tool as mt
+        original_get = mt.get_memory_dir
+        mt.get_memory_dir = lambda: mem_dir
+        try:
+            store._sync_to_files()
+        finally:
+            mt.get_memory_dir = original_get
+        
+        # Check MEMORY.md exists and contains both memory entries
+        memory_md = (mem_dir / "MEMORY.md").read_text(encoding="utf-8")
+        assert "Test memory entry alpha" in memory_md
+        assert "Test memory entry beta" in memory_md
+        
+        # Check USER.md exists and contains user entry
+        user_md = (mem_dir / "USER.md").read_text(encoding="utf-8")
+        assert "Test user entry" in user_md
+    
+    def test_sync_then_recover(self, store, tmp_path):
+        """Full round-trip: add entries → sync to files → wipe DB → recover from files."""
+        mem_dir = tmp_path / "memories"
+        mem_dir.mkdir()
+        
+        # Add entries
+        store.add("memory", "Round trip memory", category="environment", key="round_trip_mem")
+        store.add("user", "Round trip user", category="user", key="round_trip_user")
+        
+        import tools.memory_tool as mt
+        original_get = mt.get_memory_dir
+        mt.get_memory_dir = lambda: mem_dir
+        
+        # Sync to flat files
+        try:
+            store._sync_to_files()
+        finally:
+            mt.get_memory_dir = original_get
+        
+        # Verify flat files have content
+        memory_md = (mem_dir / "MEMORY.md").read_text(encoding="utf-8")
+        assert "Round trip memory" in memory_md
+        user_md = (mem_dir / "USER.md").read_text(encoding="utf-8")
+        assert "Round trip user" in user_md
+        
+        # Simulate DB wipe
+        store._execute("DELETE FROM memories")
+        rows = store._query("SELECT * FROM memories")
+        assert len(rows) == 0
+        
+        # Re-migrate from flat files
+        store._migrated = False
+        mt.get_memory_dir = lambda: mem_dir
+        try:
+            store._migrate_from_files()
+        finally:
+            mt.get_memory_dir = original_get
+        
+        # Verify recovery
+        rows_recovered = store._query("SELECT * FROM memories")
+        assert len(rows_recovered) >= 2
 
 
 # ---------------------------------------------------------------------------

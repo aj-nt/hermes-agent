@@ -2860,9 +2860,17 @@ class AIAgent:
 
         This calls on_session_end() then shutdown_all() on the memory
         manager, and on_session_end() on the context engine.
+        Also syncs built-in memory store to flat files for backup.
         NOT called per-turn — only at CLI exit, /reset, gateway
         session expiry, etc.
         """
+        # Sync built-in memory to flat files before shutting down
+        if self._memory_store:
+            try:
+                self._memory_store.consolidate()
+            except Exception:
+                pass
+
         if self._memory_manager:
             try:
                 self._memory_manager.on_session_end(messages or [])
@@ -2886,7 +2894,15 @@ class AIAgent:
         """Trigger end-of-session extraction without tearing providers down.
         Called when session_id rotates (e.g. /new, context compression);
         providers keep their state and continue running under the old
-        session_id — they just flush pending extraction now."""
+        session_id — they just flush pending extraction now.
+        Also syncs built-in memory to flat files for backup.
+        """
+        if self._memory_store:
+            try:
+                self._memory_store.consolidate()
+            except Exception:
+                pass
+
         if not self._memory_manager:
             return
         try:

@@ -361,8 +361,14 @@ class MemoryStore:
         
         Uses INSERT OR IGNORE so partially-migrated tables are handled correctly —
         existing rows (by unique key) are skipped, not duplicated.
-        Only runs once: after successful migration, a flag is written to state_meta
-        so deleted entries don't reappear on future sessions.
+        
+        Migration strategy:
+        - First run: imports all flat-file entries into SQLite.
+        - Subsequent runs: skipped via _migrated flag (in-memory) and
+          state_meta row (persistent).
+        - Recovery: if memories table is empty despite memories_migrated=1
+          (DB corruption, schema rebuild, accidental DELETE), re-migrates
+          from flat files so data isn't permanently lost.
         """
         if self._migrated:
             return
@@ -375,15 +381,49 @@ class MemoryStore:
             return
         
         # Check if migration already ran (persisted in state_meta)
+        migration_done = False
         try:
             row = self._query_one(
                 "SELECT value FROM state_meta WHERE key = 'memories_migrated'"
             )
             if row and row[0] == "1":
-                self._migrated = True
-                return
+                migration_done = True
         except Exception:
             pass  # state_meta might not exist yet — proceed with migration
+        
+        if migration_done:
+            # Recover from empty table: if migration ran but all rows are gone
+            # (DB corruption, schema rebuild, accidental DELETE), re-migrate
+            # from flat files rather than starting with zero knowledge.
+            try:
+                count_row = self._query_one("SELECT COUNT(*) FROM memories")
+                if count_row and count_row[0] > 0:
+                    # Table has data — migration is done, nothing to do
+                    self._migrated = True
+                    return
+            except Exception:
+                pass  # Can't count — proceed with re-migration attempt
+            
+            # Table is empty despite migration flag. Check if flat files exist.
+            mem_dir = get_memory_dir()
+            has_files = (mem_dir / "MEMORY.md").exists() or (mem_dir / "USER.md").exists()
+            if has_files:
+                # Clear the migration flag so we re-import from files
+                logger.warning(
+                    "Memories table is empty but migration flag is set. "
+                    "Re-migrating from flat files to recover data."
+                )
+                try:
+                    self._execute(
+                        "DELETE FROM state_meta WHERE key = 'memories_migrated'"
+                    )
+                except Exception:
+                    pass  # state_meta might not exist — proceed anyway
+                # Fall through to migration below
+            else:
+                # No flat files to recover from — nothing we can do
+                self._migrated = True
+                return
         
         mem_dir = get_memory_dir()
         migrated_count = 0
@@ -408,7 +448,8 @@ class MemoryStore:
                 except Exception as e:
                     logger.warning(f"Migration: failed to insert entry '{entry[:50]}...': {e}")
         
-        # Mark migration as complete in state_meta so it never re-runs
+        # Mark migration as complete in state_meta so it doesn't re-run
+        # unless the table is empty again (see recovery check above)
         try:
             self._execute(
                 "INSERT OR REPLACE INTO state_meta (key, value) VALUES ('memories_migrated', '1')"
@@ -432,6 +473,43 @@ class MemoryStore:
             return []
         entries = [e.strip() for e in raw.split(ENTRY_DELIMITER)]
         return [e for e in entries if e]
+    
+    def _sync_to_files(self):
+        """Write current SQLite contents back to MEMORY.md/USER.md as backup.
+        
+        Called at session end (via consolidate) so the flat files always
+        reflect the current state. This ensures flat files can serve as
+        a recovery source if the SQLite memories table is lost.
+        
+        Uses a .lock file to prevent concurrent writes across sessions.
+        """
+        mem_dir = get_memory_dir()
+        mem_dir.mkdir(parents=True, exist_ok=True)
+        
+        for target, filename in [("memory", "MEMORY.md"), ("user", "USER.md")]:
+            try:
+                rows = self._query(
+                    "SELECT content FROM memories WHERE target = ? "
+                    "ORDER BY priority DESC, last_accessed DESC",
+                    (target,)
+                )
+                entries = [r[0] for r in rows if r[0] and r[0].strip()]
+                content = ENTRY_DELIMITER.join(entries) if entries else ""
+                
+                filepath = mem_dir / filename
+                lockpath = mem_dir / (filename + ".lock")
+                
+                # Write via .lock file for atomicity
+                try:
+                    lockpath.write_text("", encoding="utf-8")
+                    filepath.write_text(content, encoding="utf-8")
+                finally:
+                    try:
+                        lockpath.unlink()
+                    except OSError:
+                        pass
+            except Exception as e:
+                logger.warning(f"Failed to sync {filename}: {e}")
     
     # -- Public API --
     
@@ -937,6 +1015,16 @@ class MemoryStore:
                 stats["evicted_quirks"] = 1
         except Exception as e:
             logger.warning(f"Consolidation: quirk eviction failed: {e}")
+        
+        # 3. Sync SQLite contents back to flat files as a backup
+        #    This ensures MEMORY.md/USER.md reflect the current state and
+        #    can serve as a recovery source if the memories table is lost.
+        try:
+            self._sync_to_files()
+            stats["synced_to_files"] = True
+        except Exception as e:
+            logger.warning(f"Consolidation: sync to files failed: {e}")
+            stats["synced_to_files"] = False
         
         return {"success": True, "stats": stats}
     
