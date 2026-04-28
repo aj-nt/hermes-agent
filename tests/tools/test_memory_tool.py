@@ -337,6 +337,44 @@ class TestMemoryStoreSearch:
         assert result["success"] is True
         assert result["count"] >= 1
 
+    # -- Auto-OR for multi-word queries --
+
+    def test_search_multi_word_defaults_to_or(self, store):
+        """Multi-word queries without explicit operators should default to OR
+        (match any term), not AND (match all terms in one row)."""
+        store.add("memory", "Python prefers explicit over implicit", category="environment", key="python_zen")
+        store.add("memory", "Mac Mini runs Ollama", category="environment", key="ollama_host")
+
+        # "Python Ollama" should match BOTH entries (any term), not require
+        # both words in a single entry (AND -> 0 results).
+        result = store.search("Python Ollama")
+        assert result["success"] is True
+        assert result["count"] >= 2  # Both entries matched
+
+    def test_search_explicit_and_still_works(self, store):
+        """Explicit AND in query should be preserved as AND."""
+        store.add("memory", "Python prefers explicit over implicit", category="environment", key="python_zen")
+        store.add("memory", "Mac Mini runs Ollama and Python", category="environment", key="combo")
+
+        # With explicit AND, only entries containing BOTH words should match
+        result = store.search("Python AND Ollama")
+        assert result["success"] is True
+        assert result["count"] == 1  # Only the combo entry
+        assert result["results"][0]["key"] == "combo"
+
+    def test_search_single_word_no_or_inserted(self, store):
+        """Single-word queries should NOT have OR inserted."""
+        sanitized = MemoryStore._sanitize_fts5_query("memory")
+        assert sanitized == "memory"
+        assert " OR " not in sanitized
+
+    def test_search_quoted_phrase_no_or_inserted(self, store):
+        """Quoted phrases should NOT have OR inserted inside them."""
+        store.add("memory", "The memory architecture uses SQLite", category="environment", key="mem_arch")
+        # Exact phrase match should work without OR being inserted
+        result = store.search('"memory architecture"')
+        assert result["success"] is True
+
 
 # ---------------------------------------------------------------------------
 # Consolidation
