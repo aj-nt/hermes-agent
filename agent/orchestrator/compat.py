@@ -316,27 +316,151 @@ class AIAgentCompatShim:
             return raw_result
         return _namespace_to_dict(raw_result)
 
+    # Agent-level tools that need access to parent AIAgent state stores
+    # and cannot be dispatched through model_tools.handle_function_call.
+    # Must mirror the set in model_tools._AGENT_LOOP_TOOLS.
+    _AGENT_LOOP_TOOLS = frozenset({"todo", "memory", "session_search", "delegate_task", "checkpoint", "clarify"})
+
     def _dispatch_tool(self, name: str, args: dict) -> str:
-        """Delegate tool dispatch to model_tools.handle_function_call.
+        """Dispatch a tool call through the appropriate handler.
 
-        Bridges ToolExecutor → Hermes tool registry. This reuses the
-        entire existing tool infrastructure, including sandboxing,
-        argument coercion, and plugin hooks.
+        Agent-loop tools (memory, session_search, todo, etc.) need access
+        to parent AIAgent state stores and are handled inline. All other
+        tools delegate to model_tools.handle_function_call which provides
+        sandboxing, argument coercion, and plugin hooks.
         """
-        from model_tools import handle_function_call
-
-        task_id = getattr(self._agent, "task_id", None) if self._agent else None
-
         logger.info(f"[pipeline] Tool dispatch: {name}({list(args.keys())})")
-        result = handle_function_call(
-            function_name=name,
-            function_args=args,
-            task_id=task_id,
-            session_id=self.session_id,
-        )
+
+        # Agent-loop tools: these need parent state (_memory_store,
+        # _session_db, etc.) and cannot go through handle_function_call
+        # (which rejects them with "must be handled by the agent loop").
+        if name in self._AGENT_LOOP_TOOLS:
+            result = self._dispatch_agent_loop_tool(name, args)
+        else:
+            from model_tools import handle_function_call
+
+            task_id = getattr(self._agent, "task_id", None) if self._agent else None
+            result = handle_function_call(
+                function_name=name,
+                function_args=args,
+                task_id=task_id,
+                session_id=self.session_id,
+            )
         # Record tool use for nudge tracking
         self.memory.record_tool_use(name)
         return result
+
+    def _dispatch_agent_loop_tool(self, name: str, args: dict) -> str:
+        """Handle agent-level tools that need parent AIAgent state.
+
+        Mirrors the if/elif dispatch in run_agent._invoke_tool and the
+        sequential path's tool handling, but from the pipeline context.
+        Falls back to an error message when the parent agent or required
+        state is not available (e.g. delegate_task subagents).
+        """
+        import json as _json
+
+        if name == "memory":
+            if self._agent is None:
+                return _json.dumps({"error": "Memory not available: no parent agent."})
+            _memory_store = getattr(self._agent, "_memory_store", None)
+            if _memory_store is None:
+                return _json.dumps({"error": "Memory not available: memory store not initialized."})
+            from tools.memory_tool import memory_tool as _memory_tool
+            target = args.get("target", "memory")
+            result = _memory_tool(
+                action=args.get("action"),
+                target=target,
+                content=args.get("content"),
+                old_text=args.get("old_text"),
+                category=args.get("category"),
+                key=args.get("key"),
+                priority=args.get("priority"),
+                query=args.get("query"),
+                store=_memory_store,
+            )
+            # Bridge: notify external memory provider of writes
+            _memory_manager = getattr(self._agent, "_memory_manager", None)
+            if _memory_manager and args.get("action") in ("add", "replace"):
+                try:
+                    _memory_manager.on_memory_write(
+                        args.get("action", ""),
+                        target,
+                        args.get("content", ""),
+                        metadata=self._build_memory_write_metadata(),
+                    )
+                except Exception:
+                    pass
+            return result
+
+        elif name == "session_search":
+            if self._agent is None:
+                return _json.dumps({"success": False, "error": "Session search not available: no parent agent."})
+            _session_db = getattr(self._agent, "_session_db", None)
+            if not _session_db:
+                return _json.dumps({"success": False, "error": "Session database not available."})
+            from tools.session_search_tool import session_search as _session_search
+            return _session_search(
+                query=args.get("query", ""),
+                role_filter=args.get("role_filter"),
+                limit=args.get("limit", 3),
+                fast=args.get("fast", True),
+                db=_session_db,
+                current_session_id=self.session_id,
+            )
+
+        elif name == "todo":
+            if self._agent is None:
+                return _json.dumps({"error": "Todo not available: no parent agent."})
+            _todo_store = getattr(self._agent, "_todo_store", None)
+            from tools.todo_tool import todo_tool as _todo_tool
+            return _todo_tool(
+                todos=args.get("todos"),
+                merge=args.get("merge", False),
+                store=_todo_store,
+            )
+
+        elif name == "clarify":
+            if self._agent is None:
+                return _json.dumps({"error": "Clarify not available: no parent agent."})
+            from tools.clarify_tool import clarify_tool as _clarify_tool
+            _clarify_callback = getattr(self._agent, "clarify_callback", None)
+            return _clarify_tool(
+                question=args.get("question", ""),
+                choices=args.get("choices"),
+                callback=_clarify_callback,
+            )
+
+        elif name == "delegate_task":
+            if self._agent is None:
+                return _json.dumps({"error": "delegate_task not available: no parent agent."})
+            return self._agent._dispatch_delegate_task(args)
+
+        elif name == "checkpoint":
+            if self._agent is None:
+                return _json.dumps({"error": "Checkpoint not available: no parent agent."})
+            from tools.checkpoint_tool import checkpoint_tool as _checkpoint_tool
+            _checkpoint_store = getattr(self._agent, "_checkpoint_store", None)
+            return _checkpoint_tool(
+                action=args.get("action"),
+                task=args.get("task"),
+                progress=args.get("progress"),
+                state=args.get("state"),
+                decisions=args.get("decisions"),
+                blocked=args.get("blocked"),
+                unresolved=args.get("unresolved"),
+                store=_checkpoint_store,
+                agent=self._agent,
+            )
+
+        return _json.dumps({"error": f"Unknown agent-loop tool: {name}"})
+
+    def _build_memory_write_metadata(self) -> dict:
+        """Build metadata dict for memory write notifications."""
+        return {
+            "session_id": self.session_id,
+            "pipeline": True,
+        }
 
     def _prepare_request(self, ctx: ConversationContext) -> PreparedRequest:
         """Build API kwargs using AIAgent._build_api_kwargs.

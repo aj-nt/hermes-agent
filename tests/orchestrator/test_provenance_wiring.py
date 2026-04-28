@@ -29,8 +29,9 @@ class TestDispatchRecordsToolUse:
         # Nudge should be due
         assert shim.memory.should_nudge() is not None
 
-        # Dispatch a memory tool
-        with patch("model_tools.handle_function_call", return_value="ok"):
+        # Dispatch a memory tool — mock the agent-loop dispatch since
+        # we're only testing nudge tracking, not the actual memory tool.
+        with patch.object(shim, "_dispatch_agent_loop_tool", return_value='{"success": true}'):
             result = shim._dispatch_tool("memory", {"action": "add", "content": "test"})
 
         # Memory nudge should be reset
