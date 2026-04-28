@@ -77,7 +77,7 @@ QUIRK_INACTIVITY_THRESHOLD = 60 * 24 * 3600
 QUIRK_MIN_ACCESS_FOR_KEEP = 2
 
 # Hot memory: minimum priority to be considered for injection
-HOT_MIN_PRIORITY = 3
+HOT_MIN_PRIORITY = 4
 
 # ---------------------------------------------------------------------------
 # Security scanning — injection/exfiltration detection
@@ -261,6 +261,44 @@ class MemoryStore:
         self._system_prompt_snapshot: Dict[str, str] = {"memory": "", "user": "", "recent_context": ""}
     
     # -- Private: database access --
+    
+    @staticmethod
+    def _sanitize_fts5_query(query: str) -> str:
+        """Sanitize an FTS5 query so colons and other special chars don't
+        trigger column-filter errors, while preserving boolean operators.
+        
+        Rules:
+        - FTS5 operators (OR, AND, NOT, NEAR) left bare when surrounded by spaces.
+        - Tokens already inside double quotes are kept as-is (phrase match).
+        - Bare tokens containing : or other FTS5-special chars are wrapped in
+          double quotes (e.g. layer:4 -> "layer:4").
+        - Single bare words are kept as-is for normal token matching.
+        """
+        import re
+        FTS5_OPERATORS = {'OR', 'AND', 'NOT', 'NEAR'}
+        # Tokenize: split on whitespace, but preserve quoted phrases
+        # regex captures: quoted groups OR individual tokens
+        tokens = re.findall(r'"[^"]*"|\S+', query)
+        result_parts = []
+        for tok in tokens:
+            # Already a quoted phrase — keep as-is
+            if tok.startswith('"') and tok.endswith('"'):
+                result_parts.append(tok)
+                continue
+            # FTS5 boolean operator
+            if tok.upper() in FTS5_OPERATORS:
+                result_parts.append(tok)
+                continue
+            # Needs quoting if it contains colons, parens, asterisks, ^ etc.
+            # that FTS5 would misinterpret as column filters or special syntax.
+            if any(ch in tok for ch in (':', '(', ')', '*', '^', '{', '}')):
+                # Escape internal double quotes by doubling them
+                escaped = tok.replace('"', '""')
+                result_parts.append(f'"{escaped}"')
+                continue
+            # Bare word — pass through as-is for normal FTS5 token matching
+            result_parts.append(tok)
+        return ' '.join(result_parts) if result_parts else query
     
     def _execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
         """Execute a SQL write statement. Handles SessionDB or raw connection."""
@@ -738,9 +776,10 @@ class MemoryStore:
             # Sanitize query: FTS5 interprets 'word:...' as column filters.
             # Since our FTS table only has the 'content' column, any colonated
             # term (layer:4, agent:primary, http://...) triggers "no such column".
-            # Wrapping in double quotes forces FTS5 phrase-match mode.
-            # Escape any existing double quotes in the query first.
-            safe_query = '"' + query.replace('"', '""') + '"'
+            # Strategy: quote individual tokens that contain colons (or other
+            # FTS5-special chars) while preserving boolean operators (OR, AND, NOT).
+            # Tokens already inside double quotes are left as-is (phrase match).
+            safe_query = self._sanitize_fts5_query(query)
             sql = """
                 SELECT m.id, m.target, m.category, m.key, m.content, m.priority,
                        m.created_at, m.updated_at, m.last_accessed, m.access_count
@@ -775,16 +814,26 @@ class MemoryStore:
                     "access_count": r[9],
                 })
             
-            # FTS5 phrase matching is exact — "layer:4" won't match "Layer 4".
             # If FTS5 returns nothing, fall back to LIKE for partial matching.
+            # Split on OR/AND to search each term individually.
             if not results and query:
+                import re as _re
+                raw_terms = _re.split(r'\s+(?:OR|AND)\s+', query, flags=_re.IGNORECASE)
                 like_sql = """
                     SELECT id, target, category, key, content, priority,
                            created_at, updated_at, last_accessed, access_count
                     FROM memories
-                    WHERE content LIKE ?
                 """
-                like_params: list = [f"%{query}%"]
+                like_conditions = []
+                like_params: list = []
+                for term in raw_terms:
+                    term = term.strip().strip('"')
+                    if term:
+                        like_conditions.append("content LIKE ?")
+                        like_params.append(f"%{term}%")
+                if not like_conditions:
+                    return {"success": True, "results": [], "count": 0}
+                like_sql += " WHERE (" + " OR ".join(like_conditions) + ")"
                 if target:
                     like_sql += " AND target = ?"
                     like_params.append(target)
