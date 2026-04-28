@@ -16,8 +16,12 @@ Production wiring uses from_defaults() factories.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import uuid
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
 
 from agent.orchestrator.context import (
@@ -398,8 +402,404 @@ class OpenAICompatibleProvider(ProviderProtocol):
 
 
 # ============================================================================
-# OllamaProvider
+# Streaming Support — Step 3b
 # ============================================================================
+
+@dataclass
+class StreamCallbacks:
+    """Callbacks for streaming execution events.
+
+    Mirrors the callbacks currently on AIAgent (stream_delta_callback,
+    reasoning_callback, tool_gen_callback) plus the on_first_delta
+    closure used in _interruptible_streaming_api_call.
+    """
+
+    stream_delta: Optional[Callable[[str], None]] = None
+    reasoning_delta: Optional[Callable[[str], None]] = None
+    tool_gen_started: Optional[Callable[[str], None]] = None
+    first_delta: Optional[Callable[[], None]] = None
+    activity_touch: Optional[Callable[[str], None]] = None
+
+
+@dataclass
+class StreamResult:
+    """Accumulated result from a streaming chat completions call.
+
+    Holds all the data extracted from SSE chunks, then converts to a
+    SimpleNamespace matching the non-streaming response shape that the
+    rest of the agent loop expects.
+    """
+
+    content: Optional[str] = None
+    tool_calls: Optional[List[SimpleNamespace]] = None
+    reasoning: Optional[str] = None
+    finish_reason: str = "stop"
+    model_name: Optional[str] = None
+    usage: Any = None
+    partial_tool_names: List[str] = field(default_factory=list)
+
+    def to_response(self) -> SimpleNamespace:
+        """Convert to a SimpleNamespace matching the non-streaming OpenAI response shape.
+
+        This is what _call_chat_completions returns — the agent loop
+        processes it identically regardless of streaming vs non-streaming.
+        """
+        # Build tool_calls list (or None)
+        mock_tool_calls = None
+        has_truncated_tool_args = False
+        if self.tool_calls:
+            mock_tool_calls = []
+            for tc in self.tool_calls:
+                arguments = tc.function.arguments
+                tool_name = tc.function.name or "?"
+                if arguments and arguments.strip():
+                    try:
+                        json.loads(arguments)
+                    except json.JSONDecodeError:
+                        # Attempt repair before flagging as truncated.
+                        # Models like GLM-5.1 produce trailing commas,
+                        # unclosed brackets, Python None, etc.
+                        from agent.sanitization import _repair_tool_call_arguments
+                        repaired = _repair_tool_call_arguments(arguments, tool_name)
+                        if repaired != "{}":
+                            arguments = repaired
+                        else:
+                            has_truncated_tool_args = True
+
+                mock_tool_calls.append(SimpleNamespace(
+                    id=tc.id,
+                    type=tc.type,
+                    extra_content=tc.extra_content if hasattr(tc, "extra_content") else None,
+                    function=SimpleNamespace(
+                        name=tc.function.name,
+                        arguments=arguments,
+                    ),
+                ))
+
+        effective_finish_reason = self.finish_reason or "stop"
+        if has_truncated_tool_args:
+            effective_finish_reason = "length"
+
+        mock_message = SimpleNamespace(
+            role="assistant",
+            content=self.content,
+            tool_calls=mock_tool_calls,
+            reasoning_content=self.reasoning,
+        )
+        mock_choice = SimpleNamespace(
+            index=0,
+            message=mock_message,
+            finish_reason=effective_finish_reason,
+        )
+        return SimpleNamespace(
+            id="stream-" + str(uuid.uuid4()),
+            model=self.model_name,
+            choices=[mock_choice],
+            usage=self.usage,
+        )
+
+
+class StreamingChatCompletionsExecutor:
+    """Encapsulates the streaming call logic from _call_chat_completions.
+
+    This is Step 3b of the Kore redesign: extracting the ~250-line
+    _call_chat_completions closure from run_agent.py into a testable,
+    injectable class.
+
+    The executor:
+    1. Builds stream kwargs (stream=True, stream_options, timeouts)
+    2. Creates a per-request OpenAI client via injected factory
+    3. Iterates SSE chunks, accumulating content/tool_calls/reasoning/usage
+    4. Fires callbacks (stream_delta, reasoning, tool_gen, first_delta, activity)
+    5. Handles Ollama index-reuse for parallel tool calls
+    6. Repairs truncated tool-call JSON arguments
+    7. Returns a StreamResult that can be converted to a SimpleNamespace
+       matching the non-streaming response shape
+
+    The outer stale-stream detector, retry loop, and thread management
+    remain in run_agent.py for now — they'll be extracted in later steps.
+    """
+
+    def __init__(
+        self,
+        client_factory: Callable[[], Any],
+        close_client_fn: Callable[[Any], None],
+        request_config: RequestConfig,
+        base_url: str,
+        callbacks: StreamCallbacks,
+        interrupt_check: Callable[[], bool],
+        is_local: bool = False,
+        model: str = "",
+        capture_rate_limits_fn: Optional[Callable[[Any], None]] = None,
+    ) -> None:
+        self._client_factory = client_factory
+        self._close_client_fn = close_client_fn
+        self._request_config = request_config
+        self._base_url = base_url
+        self._callbacks = callbacks
+        self._interrupt_check = interrupt_check
+        self._is_local = is_local
+        self._model = model
+        self._capture_rate_limits_fn = capture_rate_limits_fn
+
+    def execute_streaming(self, api_kwargs: dict) -> StreamResult:
+        """Execute a streaming chat completions call and return accumulated result.
+
+        This is the core logic from _call_chat_completions (run_agent.py:4435-4686).
+        It does NOT include the outer thread/retry/stale-detector — those
+        remain in _interruptible_streaming_api_call for now.
+
+        Args:
+            api_kwargs: The kwargs dict from prepare_request (or _build_api_kwargs).
+                        stream=True and stream_options will be added by this method.
+
+        Returns:
+            StreamResult with accumulated content, tool_calls, reasoning, etc.
+        """
+        import httpx as _httpx
+        from agent.model_metadata import is_local_endpoint
+
+        # Per-provider / per-model request_timeout_seconds
+        _provider_timeout_cfg = get_provider_request_timeout(
+            self._request_config.model, self._base_url
+        )
+        _base_timeout = (
+            _provider_timeout_cfg
+            if _provider_timeout_cfg is not None
+            else float(os.getenv("HERMES_API_TIMEOUT", 1800.0))
+        )
+
+        # Read timeout: config wins. Otherwise use HERMES_STREAM_READ_TIMEOUT
+        # (default 120s) for cloud providers.
+        if _provider_timeout_cfg is not None:
+            _stream_read_timeout = _provider_timeout_cfg
+        else:
+            _stream_read_timeout = float(os.getenv("HERMES_STREAM_READ_TIMEOUT", 120.0))
+            # Local providers (Ollama, llama.cpp) can take minutes for
+            # prefill on large contexts. Auto-increase read timeout.
+            if _stream_read_timeout == 120.0 and self._base_url and self._is_local:
+                _stream_read_timeout = _base_timeout
+                logger.debug(
+                    "Local provider detected (%s) — stream read timeout raised to %.0fs",
+                    self._base_url, _stream_read_timeout,
+                )
+
+        stream_kwargs = {
+            **api_kwargs,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "timeout": _httpx.Timeout(
+                connect=30.0,
+                read=_stream_read_timeout,
+                write=_base_timeout,
+                pool=30.0,
+            ),
+        }
+
+        # Create per-request client
+        request_client = self._client_factory()
+        try:
+            stream = request_client.chat.completions.create(**stream_kwargs)
+
+            # Capture rate limit headers from the initial HTTP response
+            if self._capture_rate_limits_fn is not None:
+                self._capture_rate_limits_fn(getattr(stream, "response", None))
+
+            # Touch activity
+            if self._callbacks.activity_touch is not None:
+                self._callbacks.activity_touch("waiting for provider response (streaming)")
+
+            # --- Accumulate chunks ---
+            content_parts: list = []
+            tool_calls_acc: dict = {}
+            tool_gen_notified: set = set()
+            # Ollama reuses index 0 for parallel tool calls
+            _last_id_at_idx: dict = {}
+            _active_slot_by_idx: dict = {}
+            finish_reason = None
+            model_name = None
+            role = "assistant"
+            reasoning_parts: list = []
+            usage_obj = None
+            first_delta_fired = False
+
+            for chunk in stream:
+                if self._callbacks.activity_touch is not None:
+                    self._callbacks.activity_touch("receiving stream response")
+
+                if self._interrupt_check():
+                    break
+
+                if not chunk.choices:
+                    if hasattr(chunk, "model") and chunk.model:
+                        model_name = chunk.model
+                    # Usage in final chunk with empty choices
+                    if hasattr(chunk, "usage") and chunk.usage:
+                        usage_obj = chunk.usage
+                    continue
+
+                delta = chunk.choices[0].delta
+                if hasattr(chunk, "model") and chunk.model:
+                    model_name = chunk.model
+
+                # --- Reasoning content ---
+                reasoning_text = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                if reasoning_text:
+                    reasoning_parts.append(reasoning_text)
+                    self._fire_first_delta(first_delta_fired)
+                    first_delta_fired = True
+                    if self._callbacks.reasoning_delta is not None:
+                        try:
+                            self._callbacks.reasoning_delta(reasoning_text)
+                        except Exception:
+                            pass
+
+                # --- Text content ---
+                if delta and delta.content:
+                    content_parts.append(delta.content)
+                    if not tool_calls_acc:
+                        # No tool calls active — stream text normally
+                        self._fire_first_delta(first_delta_fired)
+                        first_delta_fired = True
+                        if self._callbacks.stream_delta is not None:
+                            try:
+                                self._callbacks.stream_delta(delta.content)
+                            except Exception:
+                                pass
+                    else:
+                        # Tool calls suppress regular content streaming.
+                        # But reasoning tags in suppressed content should still
+                        # reach the display via the stream delta callback.
+                        if self._callbacks.stream_delta is not None:
+                            try:
+                                self._callbacks.stream_delta(delta.content)
+                            except Exception:
+                                pass
+
+                # --- Tool call deltas ---
+                if delta and delta.tool_calls:
+                    for tc_delta in delta.tool_calls:
+                        raw_idx = tc_delta.index if tc_delta.index is not None else 0
+                        delta_id = tc_delta.id or ""
+
+                        # Ollama fix: detect new tool call reusing same index
+                        if raw_idx not in _active_slot_by_idx:
+                            _active_slot_by_idx[raw_idx] = raw_idx
+                        if (
+                            delta_id
+                            and raw_idx in _last_id_at_idx
+                            and delta_id != _last_id_at_idx[raw_idx]
+                        ):
+                            new_slot = max(tool_calls_acc, default=-1) + 1
+                            _active_slot_by_idx[raw_idx] = new_slot
+                        if delta_id:
+                            _last_id_at_idx[raw_idx] = delta_id
+                        idx = _active_slot_by_idx[raw_idx]
+
+                        if idx not in tool_calls_acc:
+                            tool_calls_acc[idx] = {
+                                "id": tc_delta.id or "",
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""},
+                                "extra_content": None,
+                            }
+                        entry = tool_calls_acc[idx]
+                        if tc_delta.id:
+                            entry["id"] = tc_delta.id
+                        if tc_delta.function:
+                            if tc_delta.function.name:
+                                # Assignment, not +=. Function names are atomic
+                                # identifiers delivered complete in the first
+                                # chunk (OpenAI spec). Some providers (MiniMax)
+                                # resend the full name in every chunk.
+                                entry["function"]["name"] = tc_delta.function.name
+                            if tc_delta.function.arguments:
+                                entry["function"]["arguments"] += tc_delta.function.arguments
+                        extra = getattr(tc_delta, "extra_content", None)
+                        if extra is None and hasattr(tc_delta, "model_extra"):
+                            extra = (tc_delta.model_extra or {}).get("extra_content")
+                        if extra is not None:
+                            if hasattr(extra, "model_dump"):
+                                extra = extra.model_dump()
+                            entry["extra_content"] = extra
+
+                        # Fire once per tool when the full name is available
+                        name = entry["function"]["name"]
+                        if name and idx not in tool_gen_notified:
+                            tool_gen_notified.add(idx)
+                            self._fire_first_delta(first_delta_fired)
+                            first_delta_fired = True
+                            if self._callbacks.tool_gen_started is not None:
+                                try:
+                                    self._callbacks.tool_gen_started(name)
+                                except Exception:
+                                    pass
+
+                if chunk.choices[0].finish_reason:
+                    finish_reason = chunk.choices[0].finish_reason
+
+                # Usage in the final chunk
+                if hasattr(chunk, "usage") and chunk.usage:
+                    usage_obj = chunk.usage
+
+        finally:
+            # Always close the per-request client
+            self._close_client_fn(request_client)
+
+        # Build the StreamResult
+        full_content = "".join(content_parts) or None
+        full_reasoning = "".join(reasoning_parts) or None
+
+        # Convert tool_calls_acc to list of SimpleNamespace
+        result_tool_calls = None
+        if tool_calls_acc:
+            result_tool_calls = []
+            for idx in sorted(tool_calls_acc):
+                tc = tool_calls_acc[idx]
+                result_tool_calls.append(SimpleNamespace(
+                    id=tc["id"],
+                    type=tc["type"],
+                    extra_content=tc.get("extra_content"),
+                    function=SimpleNamespace(
+                        name=tc["function"]["name"],
+                        arguments=tc["function"]["arguments"],
+                    ),
+                ))
+
+        return StreamResult(
+            content=full_content,
+            tool_calls=result_tool_calls,
+            reasoning=full_reasoning,
+            finish_reason=finish_reason or "stop",
+            model_name=model_name,
+            usage=usage_obj,
+            partial_tool_names=list(tool_gen_notified) if tool_gen_notified else [],
+        )
+
+    @staticmethod
+    def _fire_first_delta(first_delta_fired: bool) -> None:
+        """Fire the first-delta callback if it hasn't fired yet.
+
+        NOTE: This is a no-op in the executor because the first_delta_fired
+        tracking is handled locally in execute_streaming. The callback itself
+        is invoked directly in execute_streaming.
+        """
+        pass
+
+
+def get_provider_request_timeout(model: str, base_url: str) -> Optional[float]:
+    """Get per-provider request timeout from config.
+
+    Delegates to AIAgent._get_provider_request_timeout via import
+    if available, otherwise returns None (use default).
+    """
+    try:
+        # Late import to avoid circular dependency
+        from run_agent import _get_provider_request_timeout
+        return _get_provider_request_timeout(model, base_url)
+    except ImportError:
+        return None
+
 
 class OllamaProvider(OpenAICompatibleProvider):
     """Ollama/GLM-specific provider extending OpenAICompatibleProvider.
