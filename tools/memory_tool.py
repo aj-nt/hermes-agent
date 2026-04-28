@@ -455,6 +455,7 @@ class MemoryStore:
             # the current session and empty sessions), then take top 2.
             # Exclude child sessions (parent_session_id IS NULL).
             # Exclude the current session.
+            # Exclude cron sessions — they're noise in recent context.
             # Require at least 1 message (via subquery).
             query = """
                 SELECT s.id, s.title, s.started_at,
@@ -469,6 +470,7 @@ class MemoryStore:
                 FROM sessions s
                 WHERE s.parent_session_id IS NULL
                   AND s.id != ?
+                  AND s.source != 'cron'
                   AND (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) > 0
                 ORDER BY s.started_at DESC
                 LIMIT 2

@@ -284,3 +284,39 @@ class TestRecentContextBlock:
 
         result = store.build_recent_context_block(current_session_id="sess_new")
         assert "5" in result  # message count displayed
+
+    def test_excludes_cron_sessions(self, store, full_db):
+        """Cron sessions should not appear in recent context — they're noise."""
+        # Insert a cron session that's the most recent
+        _insert_session(full_db, "cron_recent", title=None,
+                        source="cron", started_at=time.time() - 60)
+        _insert_message(full_db, "cron_recent", "user",
+                        "scheduled health check", timestamp=time.time() - 55)
+
+        # Insert a real CLI session that's older
+        _insert_session(full_db, "cli_older", title="Kore refactor session",
+                        source="cli", started_at=time.time() - 300)
+        _insert_message(full_db, "cli_older", "user", "let's work on the pipeline",
+                        timestamp=time.time() - 290)
+
+        result = store.build_recent_context_block(current_session_id="sess_new")
+        # The cron session should NOT appear
+        assert "health check" not in result
+        assert "scheduled" not in result
+        # The real session SHOULD appear
+        assert "Kore refactor session" in result
+
+    def test_cron_sessions_never_appear_even_when_only_recent(self, store, full_db):
+        """If only cron sessions exist, recent context should be empty, not show crons."""
+        # Only cron sessions — no real user sessions
+        _insert_session(full_db, "cron_1", title=None,
+                        source="cron", started_at=time.time() - 60)
+        _insert_message(full_db, "cron_1", "user", "cron task output",
+                        timestamp=time.time() - 55)
+        _insert_session(full_db, "cron_2", title=None,
+                        source="cron", started_at=time.time() - 120)
+        _insert_message(full_db, "cron_2", "user", "another cron job",
+                        timestamp=time.time() - 115)
+
+        result = store.build_recent_context_block(current_session_id="sess_new")
+        assert result == ""

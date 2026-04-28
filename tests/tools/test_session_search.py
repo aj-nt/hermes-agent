@@ -21,13 +21,17 @@ from tools.session_search_tool import (
 # =========================================================================
 
 class TestHiddenSessionSources:
-    """Verify the _HIDDEN_SESSION_SOURCES constant used for third-party isolation."""
+    """Verify the _HIDDEN_SESSION_SOURCES constant used for isolation."""
 
     def test_tool_source_is_hidden(self):
         assert "tool" in _HIDDEN_SESSION_SOURCES
 
+    def test_cron_source_is_hidden(self):
+        """Cron sessions are noise — they should not appear in search or recent context."""
+        assert "cron" in _HIDDEN_SESSION_SOURCES
+
     def test_standard_sources_not_hidden(self):
-        for src in ("cli", "telegram", "discord", "slack", "cron"):
+        for src in ("cli", "telegram", "discord", "slack"):
             assert src not in _HIDDEN_SESSION_SOURCES
 
 
