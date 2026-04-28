@@ -420,6 +420,7 @@ class StreamCallbacks:
     first_delta: Optional[Callable[[], None]] = None
     activity_touch: Optional[Callable[[str], None]] = None
     on_client_created: Optional[Callable[[Any], None]] = None
+    on_last_chunk_time: Optional[Callable[[], None]] = None
 
 
 @dataclass
@@ -853,6 +854,151 @@ class StreamingChatCompletionsExecutor:
             partial_tool_names=list(tool_gen_notified) if tool_gen_notified else [],
         )
 
+
+
+class AnthropicStreamingExecutor:
+    """Encapsulates the Anthropic streaming call logic from _call_anthropic.
+
+    Step 4 of the Kore redesign: extracting the ~55-line _call_anthropic
+    closure from run_agent.py into a testable, injectable class.
+
+    Unlike StreamingChatCompletionsExecutor which returns a StreamResult,
+    this executor returns the native Anthropic Message object from
+    get_final_message() — the rest of the agent loop expects that shape
+    for the anthropic_messages api_mode.
+
+    The executor:
+    1. Uses the Anthropic SDK's messages.stream() context manager
+    2. Iterates events (content_block_start, content_block_delta, message_*)
+    3. Fires callbacks (stream_delta, reasoning, tool_gen, first_delta, activity)
+    4. Tracks has_tool_use to suppress text deltas during tool calls
+    5. Returns the native Anthropic Message for downstream processing
+
+    The outer stale-stream detector, retry loop, and thread management
+    remain in run_agent.py for now.
+    """
+
+    def __init__(
+        self,
+        anthropic_client: Any,
+        callbacks: StreamCallbacks,
+        interrupt_check: Callable[[], bool],
+    ) -> None:
+        self._anthropic_client = anthropic_client
+        self._callbacks = callbacks
+        self._interrupt_check = interrupt_check
+        # Set to True when text deltas are sent to the display (for partial
+        # response stub logic on retry).  Read by the wiring layer after
+        # execute_streaming() returns.
+        self.deltas_were_sent: bool = False
+
+    @classmethod
+    def from_agent(cls, agent: Any) -> "AnthropicStreamingExecutor":
+        """Factory: create an AnthropicStreamingExecutor from an AIAgent instance.
+
+        Injects the agent's fire methods as callbacks and the interrupt check.
+        """
+        def _stream_delta_wrapper(text: str) -> None:
+            agent._fire_stream_delta(text)
+
+        callbacks = StreamCallbacks(
+            stream_delta=_stream_delta_wrapper,
+            reasoning_delta=lambda text: agent._fire_reasoning_delta(text),
+            tool_gen_started=lambda name: agent._fire_tool_gen_started(name),
+            activity_touch=lambda msg: agent._touch_activity(msg),
+        )
+
+        return cls(
+            anthropic_client=agent._anthropic_client,
+            callbacks=callbacks,
+            interrupt_check=lambda: agent._interrupt_requested,
+        )
+
+    def execute_streaming(self, api_kwargs: dict) -> Any:
+        """Execute an Anthropic streaming call and return the native Message.
+
+        This is the core logic from _call_anthropic (run_agent.py:4494-4549).
+        The outer stale-stream detector and retry loop remain in run_agent.py.
+
+        Args:
+            api_kwargs: The kwargs dict for the Anthropic SDK stream() call.
+
+        Returns:
+            The native Anthropic Message from stream.get_final_message().
+        """
+        has_tool_use = False
+        first_delta_fired = False
+
+        with self._anthropic_client.messages.stream(**api_kwargs) as stream:
+            for event in stream:
+                # Notify stale-stream detector and activity tracker
+                if self._callbacks.on_last_chunk_time is not None:
+                    self._callbacks.on_last_chunk_time()
+                if self._callbacks.activity_touch is not None:
+                    self._callbacks.activity_touch("receiving stream response")
+
+                # Check for interrupt
+                if self._interrupt_check():
+                    break
+
+                event_type = getattr(event, "type", None)
+
+                if event_type == "content_block_start":
+                    block = getattr(event, "content_block", None)
+                    if block and getattr(block, "type", None) == "tool_use":
+                        has_tool_use = True
+                        tool_name = getattr(block, "name", None)
+                        if tool_name:
+                            if not first_delta_fired:
+                                first_delta_fired = True
+                                if self._callbacks.first_delta is not None:
+                                    try:
+                                        self._callbacks.first_delta()
+                                    except Exception:
+                                        pass
+                            if self._callbacks.tool_gen_started is not None:
+                                try:
+                                    self._callbacks.tool_gen_started(tool_name)
+                                except Exception:
+                                    pass
+
+                elif event_type == "content_block_delta":
+                    delta = getattr(event, "delta", None)
+                    if delta:
+                        delta_type = getattr(delta, "type", None)
+                        if delta_type == "text_delta":
+                            text = getattr(delta, "text", "")
+                            if text and not has_tool_use:
+                                if not first_delta_fired:
+                                    first_delta_fired = True
+                                    if self._callbacks.first_delta is not None:
+                                        try:
+                                            self._callbacks.first_delta()
+                                        except Exception:
+                                            pass
+                                if self._callbacks.stream_delta is not None:
+                                    try:
+                                        self._callbacks.stream_delta(text)
+                                        self.deltas_were_sent = True
+                                    except Exception:
+                                        pass
+                        elif delta_type == "thinking_delta":
+                            thinking_text = getattr(delta, "thinking", "")
+                            if thinking_text:
+                                if not first_delta_fired:
+                                    first_delta_fired = True
+                                    if self._callbacks.first_delta is not None:
+                                        try:
+                                            self._callbacks.first_delta()
+                                        except Exception:
+                                            pass
+                                if self._callbacks.reasoning_delta is not None:
+                                    try:
+                                        self._callbacks.reasoning_delta(thinking_text)
+                                    except Exception:
+                                        pass
+
+            return stream.get_final_message()
 
 def get_provider_request_timeout(model: str, base_url: str) -> Optional[float]:
     """Get per-provider request timeout from config.

@@ -4492,61 +4492,54 @@ class AIAgent:
             # Convert StreamResult to the SimpleNamespace shape the agent loop expects.
             return stream_result.to_response()
         def _call_anthropic():
-            """Stream an Anthropic Messages API response.
+            """Stream an Anthropic Messages API response via AnthropicStreamingExecutor.
 
-            Fires delta callbacks for real-time token delivery, but returns
-            the native Anthropic Message object from get_final_message() so
-            the rest of the agent loop (validation, tool extraction, etc.)
-            works unchanged.
+            Delegates to the extracted executor class from the Kore redesign.
+            The executor handles event iteration, callback firing, and
+            has_tool_use tracking. Returns the native Anthropic Message
+            object for downstream processing.
             """
-            has_tool_use = False
+            from agent.orchestrator.provider_adapters import AnthropicStreamingExecutor
 
-            # Reset stale-stream timer for this attempt
+            # Build executor from self, wiring callbacks through the agent methods.
+            _anthropic_executor = AnthropicStreamingExecutor.from_agent(self)
+
+            # Override activity_touch to also update last_chunk_time for
+            # the stale-stream detector.
+            _orig_activity = _anthropic_executor._callbacks.activity_touch
+            def _activity_with_chunk_time(msg):
+                last_chunk_time["t"] = time.time()
+                if _orig_activity is not None:
+                    _orig_activity(msg)
+            _anthropic_executor._callbacks.activity_touch = _activity_with_chunk_time
+
+            # Wire on_last_chunk_time to update the stale-stream timer.
+            _anthropic_executor._callbacks.on_last_chunk_time = (
+                lambda: last_chunk_time.update(t=time.time())
+            )
+
+            # Wire first_delta to the outer closure's _fire_first_delta.
+            _anthropic_executor._callbacks.first_delta = _fire_first_delta
+
+            # Wire stream_delta to also track that deltas were sent (for
+            # partial-response stub logic on error).
+            _orig_stream_delta = _anthropic_executor._callbacks.stream_delta
+            def _stream_delta_with_tracking(text):
+                deltas_were_sent["yes"] = True
+                if _orig_stream_delta is not None:
+                    _orig_stream_delta(text)
+            _anthropic_executor._callbacks.stream_delta = _stream_delta_with_tracking
+
+            # Reset stale-stream timer so the detector measures from this
+            # attempt's start, not a previous attempt's last chunk.
             last_chunk_time["t"] = time.time()
-            # Use the Anthropic SDK's streaming context manager
-            with self._anthropic_client.messages.stream(**api_kwargs) as stream:
-                for event in stream:
-                    # Update stale-stream timer on every event so the
-                    # outer poll loop knows data is flowing.  Without
-                    # this, the detector kills healthy long-running
-                    # Opus streams after 180 s even when events are
-                    # actively arriving (the chat_completions path
-                    # already does this at the top of its chunk loop).
-                    last_chunk_time["t"] = time.time()
-                    self._touch_activity("receiving stream response")
 
-                    if self._interrupt_requested:
-                        break
+            result = _anthropic_executor.execute_streaming(api_kwargs)
 
-                    event_type = getattr(event, "type", None)
+            # Track whether deltas were sent for the partial-response stub
+            deltas_were_sent["yes"] = _anthropic_executor.deltas_were_sent
 
-                    if event_type == "content_block_start":
-                        block = getattr(event, "content_block", None)
-                        if block and getattr(block, "type", None) == "tool_use":
-                            has_tool_use = True
-                            tool_name = getattr(block, "name", None)
-                            if tool_name:
-                                _fire_first_delta()
-                                self._fire_tool_gen_started(tool_name)
-
-                    elif event_type == "content_block_delta":
-                        delta = getattr(event, "delta", None)
-                        if delta:
-                            delta_type = getattr(delta, "type", None)
-                            if delta_type == "text_delta":
-                                text = getattr(delta, "text", "")
-                                if text and not has_tool_use:
-                                    _fire_first_delta()
-                                    self._fire_stream_delta(text)
-                                    deltas_were_sent["yes"] = True
-                            elif delta_type == "thinking_delta":
-                                thinking_text = getattr(delta, "thinking", "")
-                                if thinking_text:
-                                    _fire_first_delta()
-                                    self._fire_reasoning_delta(thinking_text)
-
-                # Return the native Anthropic Message for downstream processing
-                return stream.get_final_message()
+            return result
 
         def _call():
             import httpx as _httpx
