@@ -542,6 +542,58 @@ class StreamingChatCompletionsExecutor:
         self._model = model
         self._capture_rate_limits_fn = capture_rate_limits_fn
 
+    @classmethod
+    def from_agent(cls, agent: Any) -> "StreamingChatCompletionsExecutor":
+        """Factory: create a StreamingChatCompletionsExecutor from an AIAgent instance.
+
+        Injects the agent's client factory, close function, fire methods,
+        and interrupt check as callbacks. The RequestConfig is built from
+        agent attributes to match _build_api_kwargs.
+        """
+        from agent.model_metadata import is_local_endpoint as _is_local_fn
+
+        base_url = getattr(agent, "base_url", "") or ""
+        is_local = _is_local_fn(base_url) if base_url else False
+
+        # Build RequestConfig from agent (mirrors OpenAICompatibleProvider.from_agent)
+        rc = RequestConfig(
+            model=getattr(agent, "model", ""),
+            base_url=base_url,
+            max_tokens=getattr(agent, "max_tokens", None),
+            ephemeral_max_output_tokens=getattr(agent, "_ephemeral_max_output_tokens", None),
+            ollama_num_ctx=getattr(agent, "_ollama_num_ctx", None),
+            reasoning_config=getattr(agent, "reasoning_config", None),
+            request_overrides=getattr(agent, "request_overrides", None),
+        )
+
+        # Wire the stream_delta callback through _fire_stream_delta
+        # so it handles _stream_needs_break paragraph-break logic
+        def _stream_delta_wrapper(text: str) -> None:
+            agent._fire_stream_delta(text)
+
+        callbacks = StreamCallbacks(
+            stream_delta=_stream_delta_wrapper,
+            reasoning_delta=lambda text: agent._fire_reasoning_delta(text),
+            tool_gen_started=lambda name: agent._fire_tool_gen_started(name),
+            activity_touch=lambda msg: agent._touch_activity(msg),
+        )
+
+        return cls(
+            client_factory=lambda: agent._create_request_openai_client(
+                reason="chat_completion_stream_request"
+            ),
+            close_client_fn=lambda client: agent._close_request_openai_client(
+                client, reason="stream_request_complete"
+            ),
+            request_config=rc,
+            base_url=base_url,
+            callbacks=callbacks,
+            interrupt_check=lambda: agent._interrupt_requested,
+            is_local=is_local,
+            model=getattr(agent, "model", ""),
+            capture_rate_limits_fn=lambda resp: agent._capture_rate_limits(resp),
+        )
+
     def execute_streaming(self, api_kwargs: dict) -> StreamResult:
         """Execute a streaming chat completions call and return accumulated result.
 
@@ -646,8 +698,13 @@ class StreamingChatCompletionsExecutor:
                 reasoning_text = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
                 if reasoning_text:
                     reasoning_parts.append(reasoning_text)
-                    self._fire_first_delta(first_delta_fired)
-                    first_delta_fired = True
+                    if not first_delta_fired:
+                        first_delta_fired = True
+                        if self._callbacks.first_delta is not None:
+                            try:
+                                self._callbacks.first_delta()
+                            except Exception:
+                                pass
                     if self._callbacks.reasoning_delta is not None:
                         try:
                             self._callbacks.reasoning_delta(reasoning_text)
@@ -659,8 +716,13 @@ class StreamingChatCompletionsExecutor:
                     content_parts.append(delta.content)
                     if not tool_calls_acc:
                         # No tool calls active — stream text normally
-                        self._fire_first_delta(first_delta_fired)
-                        first_delta_fired = True
+                        if not first_delta_fired:
+                            first_delta_fired = True
+                            if self._callbacks.first_delta is not None:
+                                try:
+                                    self._callbacks.first_delta()
+                                except Exception:
+                                    pass
                         if self._callbacks.stream_delta is not None:
                             try:
                                 self._callbacks.stream_delta(delta.content)
@@ -727,8 +789,13 @@ class StreamingChatCompletionsExecutor:
                         name = entry["function"]["name"]
                         if name and idx not in tool_gen_notified:
                             tool_gen_notified.add(idx)
-                            self._fire_first_delta(first_delta_fired)
-                            first_delta_fired = True
+                            if not first_delta_fired:
+                                first_delta_fired = True
+                                if self._callbacks.first_delta is not None:
+                                    try:
+                                        self._callbacks.first_delta()
+                                    except Exception:
+                                        pass
                             if self._callbacks.tool_gen_started is not None:
                                 try:
                                     self._callbacks.tool_gen_started(name)
@@ -775,16 +842,6 @@ class StreamingChatCompletionsExecutor:
             usage=usage_obj,
             partial_tool_names=list(tool_gen_notified) if tool_gen_notified else [],
         )
-
-    @staticmethod
-    def _fire_first_delta(first_delta_fired: bool) -> None:
-        """Fire the first-delta callback if it hasn't fired yet.
-
-        NOTE: This is a no-op in the executor because the first_delta_fired
-        tracking is handled locally in execute_streaming. The callback itself
-        is invoked directly in execute_streaming.
-        """
-        pass
 
 
 def get_provider_request_timeout(model: str, base_url: str) -> Optional[float]:

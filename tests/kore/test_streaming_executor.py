@@ -770,4 +770,173 @@ class TestStreamingExecutorStreamIteration:
         timeout = call_kwargs["timeout"]
         assert isinstance(timeout, httpx.Timeout)
         # For local, read timeout should be >= 1800 (or the base timeout)
-        assert timeout.read >= 1800.0 or timeout.read == 1800.0
+        assert timeout.read >= 1800.0
+
+
+# ============================================================================
+# first_delta callback — fires once on first meaningful delta
+# ============================================================================
+
+class TestFirstDeltaCallback:
+    """Test that StreamCallbacks.first_delta fires exactly once on the first
+    meaningful streaming delta (text, reasoning, or tool call name).
+
+    This matches the _fire_first_delta closure in _interruptible_streaming_api_call.
+    """
+
+    def test_first_delta_fires_on_text_content(self):
+        """first_delta should fire once when the first text content arrives."""
+        chunks = [
+            make_chunk(make_delta(content="Hello"), model="gpt-4o"),
+            make_chunk(make_delta(content=" world"), model="gpt-4o"),
+            make_chunk(make_delta(content=None), finish_reason="stop", model="gpt-4o"),
+        ]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = MockStream(chunks)
+
+        first_delta_calls = []
+        callbacks = StreamCallbacks(
+            first_delta=lambda: first_delta_calls.append(True),
+            stream_delta=lambda t: None,
+        )
+        rc = RequestConfig(model="gpt-4o", base_url="https://api.openai.com/v1")
+        executor = StreamingChatCompletionsExecutor(
+            client_factory=lambda: mock_client,
+            close_client_fn=lambda c: None,
+            request_config=rc,
+            base_url="https://api.openai.com/v1",
+            callbacks=callbacks,
+            interrupt_check=lambda: False,
+            is_local=False,
+            model="gpt-4o",
+        )
+
+        executor.execute_streaming({"model": "gpt-4o", "messages": []})
+        assert first_delta_calls == [True], f"Expected first_delta to fire once, got {len(first_delta_calls)} calls"
+
+    def test_first_delta_fires_on_reasoning_content(self):
+        """first_delta should fire once when reasoning content arrives first."""
+        chunks = [
+            make_chunk(make_delta(reasoning_content="Hmm..."), model="deepseek-r1"),
+            make_chunk(make_delta(content="Answer"), model="deepseek-r1"),
+            make_chunk(make_delta(content=None), finish_reason="stop", model="deepseek-r1"),
+        ]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = MockStream(chunks)
+
+        first_delta_calls = []
+        callbacks = StreamCallbacks(
+            first_delta=lambda: first_delta_calls.append(True),
+            reasoning_delta=lambda t: None,
+            stream_delta=lambda t: None,
+        )
+        rc = RequestConfig(model="deepseek-r1", base_url="https://api.deepseek.com/v1")
+        executor = StreamingChatCompletionsExecutor(
+            client_factory=lambda: mock_client,
+            close_client_fn=lambda c: None,
+            request_config=rc,
+            base_url="https://api.deepseek.com/v1",
+            callbacks=callbacks,
+            interrupt_check=lambda: False,
+            is_local=False,
+            model="deepseek-r1",
+        )
+
+        executor.execute_streaming({"model": "deepseek-r1", "messages": []})
+        # Should fire on reasoning first, NOT again on text content
+        assert len(first_delta_calls) == 1, f"Expected first_delta to fire once (on reasoning), got {len(first_delta_calls)}"
+
+    def test_first_delta_fires_on_tool_call_name(self):
+        """first_delta should fire once when a tool call name arrives first."""
+        tc_delta = SimpleNamespace(
+            index=0,
+            id="tc_1",
+            type="function",
+            function=SimpleNamespace(name="read_file", arguments=None),
+        )
+        chunks = [
+            make_chunk(make_delta(tool_calls=[tc_delta]), model="gpt-4o"),
+            make_chunk(make_delta(content=None), finish_reason="tool_calls", model="gpt-4o"),
+        ]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = MockStream(chunks)
+
+        first_delta_calls = []
+        callbacks = StreamCallbacks(
+            first_delta=lambda: first_delta_calls.append(True),
+            tool_gen_started=lambda n: None,
+        )
+        rc = RequestConfig(model="gpt-4o", base_url="https://api.openai.com/v1")
+        executor = StreamingChatCompletionsExecutor(
+            client_factory=lambda: mock_client,
+            close_client_fn=lambda c: None,
+            request_config=rc,
+            base_url="https://api.openai.com/v1",
+            callbacks=callbacks,
+            interrupt_check=lambda: False,
+            is_local=False,
+            model="gpt-4o",
+        )
+
+        executor.execute_streaming({"model": "gpt-4o", "messages": []})
+        assert len(first_delta_calls) == 1, f"Expected first_delta to fire once (on tool name), got {len(first_delta_calls)}"
+
+    def test_first_delta_does_not_fire_on_empty_stream(self):
+        """first_delta should NOT fire on an empty stream (no content deltas)."""
+        chunks = [
+            SimpleNamespace(choices=[], model="gpt-4o", usage=None),
+            make_chunk(make_delta(content=None), finish_reason="stop", model="gpt-4o"),
+        ]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = MockStream(chunks)
+
+        first_delta_calls = []
+        callbacks = StreamCallbacks(
+            first_delta=lambda: first_delta_calls.append(True),
+        )
+        rc = RequestConfig(model="gpt-4o", base_url="https://api.openai.com/v1")
+        executor = StreamingChatCompletionsExecutor(
+            client_factory=lambda: mock_client,
+            close_client_fn=lambda c: None,
+            request_config=rc,
+            base_url="https://api.openai.com/v1",
+            callbacks=callbacks,
+            interrupt_check=lambda: False,
+            is_local=False,
+            model="gpt-4o",
+        )
+
+        executor.execute_streaming({"model": "gpt-4o", "messages": []})
+        assert first_delta_calls == [], f"Expected no first_delta calls, got {len(first_delta_calls)}"
+
+    def test_first_delta_exception_does_not_break_stream(self):
+        """Exceptions in first_delta callback should be swallowed."""
+        chunks = [
+            make_chunk(make_delta(content="Hello"), model="gpt-4o"),
+            make_chunk(make_delta(content=None), finish_reason="stop", model="gpt-4o"),
+        ]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = MockStream(chunks)
+
+        def bad_first_delta():
+            raise RuntimeError("first_delta callback error")
+
+        callbacks = StreamCallbacks(
+            first_delta=bad_first_delta,
+            stream_delta=lambda t: None,
+        )
+        rc = RequestConfig(model="gpt-4o", base_url="https://api.openai.com/v1")
+        executor = StreamingChatCompletionsExecutor(
+            client_factory=lambda: mock_client,
+            close_client_fn=lambda c: None,
+            request_config=rc,
+            base_url="https://api.openai.com/v1",
+            callbacks=callbacks,
+            interrupt_check=lambda: False,
+            is_local=False,
+            model="gpt-4o",
+        )
+
+        # Should NOT raise
+        result = executor.execute_streaming({"model": "gpt-4o", "messages": []})
+        assert result.content == "Hello"
