@@ -4876,11 +4876,15 @@ class GatewayRunner:
                             {"role": "assistant", "content": response, "timestamp": ts}
                         )
                 else:
-                    # The agent already persisted these messages to SQLite via
-                    # _flush_messages_to_session_db(), so skip the DB write here
-                    # to prevent the duplicate-write bug (#860).  We still write
-                    # to JSONL for backward compatibility and as a backup.
-                    agent_persisted = self._session_db is not None
+                    # NOTE(#17021): The old run_conversation() called
+                    # _flush_messages_to_session_db() on each exit path, so the
+                    # gateway could skip the DB write to avoid duplicates (#860).
+                    # The Phase 6B-2 pipeline refactor removed those calls, so
+                    # the agent no longer persists to SQLite.  We must write
+                    # messages here ourselves.  The CLI mode handles its own
+                    # persistence via _persist_session() after each turn, but
+                    # the gateway still needs this path.
+                    agent_persisted = False
                     for msg in new_messages:
                         # Skip system messages (they're rebuilt each run)
                         if msg.get("role") == "system":
