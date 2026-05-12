@@ -298,8 +298,9 @@ class ResponseProcessingStage:
         # Extract tool calls
         tool_calls = message.get("tool_calls", [])
 
-        # Extract reasoning content (may be None)
-        reasoning_content = message.get("reasoning_content")
+        # Extract reasoning content. Some providers (DeepSeek, OpenRouter)
+        # use 'reasoning_content'; others (Ollama/GLM) use 'reasoning'.
+        reasoning_content = message.get("reasoning_content") or message.get("reasoning")
 
         # Build canonical message dict
         canonical_message = {

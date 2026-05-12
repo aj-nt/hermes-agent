@@ -552,10 +552,16 @@ class AIAgentCompatShim:
         self._sync_state_to_ctx()
         self._ctx.messages.append({"role": "user", "content": message})
 
-        # Set stream callback if provided via kwargs
+        # Set stream callback if provided via kwargs.
+        # Wire it to both ctx.stream_callback (for pipeline-internal use)
+        # and self.stream_delta_callback (so _bridge_streaming can forward
+        # EventBus 'stream_delta' events to the parent AIAgent's display layer).
+        # Without the latter, TUI message.delta events never fire because
+        # _fire_stream_delta checks self.stream_delta_callback which was None.
         stream_callback = kwargs.get("stream_callback") or self.stream_delta_callback
         if stream_callback:
             self._ctx.stream_callback = stream_callback
+            self.stream_delta_callback = stream_callback
 
         # Run the pipeline
         result: PipelineResult = self._orchestrator.run(self._ctx)
@@ -567,6 +573,12 @@ class AIAgentCompatShim:
         final_response = ""
         if result.response and result.response.message:
             final_response = result.response.message.get("content", "")
+
+        # Extract last reasoning from the final response for consumers that
+        # need it after the turn (e.g., TUI message.complete payload).
+        last_reasoning = None
+        if result.response and result.response.reasoning_content:
+            last_reasoning = result.response.reasoning_content
 
         logger.info(
             f"[pipeline] run_conversation completed: {result.iterations} iterations, "
@@ -580,6 +592,7 @@ class AIAgentCompatShim:
             "iterations": result.iterations,
             "interrupted": result.interrupted,
             "finish_reason": result.response.finish_reason if result.response else None,
+            "last_reasoning": last_reasoning,
             "total_tokens": self._state.total_tokens,
             "input_tokens": self._state.input_tokens,
             "output_tokens": self._state.output_tokens,

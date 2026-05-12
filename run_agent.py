@@ -7081,7 +7081,19 @@ class AIAgent:
         Returns:
             Dict: Complete conversation result with final response and message history
         """
-        return self._new_pipeline.run_conversation(user_message, system_message=system_message)
+        # Forward stream_callback to the pipeline so TUI streaming deltas
+        # reach the display. Without this, message.delta events are never
+        # emitted during streaming (the _stream lambda from tui_gateway is
+        # silently dropped). Also wire it to the AIAgent so _fire_stream_delta
+        # can reach it directly during streaming (the direct path via
+        # StreamingChatCompletionsExecutor).
+        if stream_callback is not None:
+            self._stream_callback = stream_callback
+        return self._new_pipeline.run_conversation(
+            user_message,
+            system_message=system_message,
+            stream_callback=stream_callback,
+        )
 
     def chat(self, message: str, stream_callback: Optional[callable] = None) -> str:
         """
