@@ -918,6 +918,8 @@ _deferred_agent_startup_done = False
 # one-shot CLI runs — which also register _run_cleanup via atexit — don't emit
 # escape codes for modes they never enabled (#36823).
 _tui_input_modes_active = False
+# Reference to the active HermesCLI instance for vagent + worktree cleanup
+_active_cli_ref = None
 
 
 def _mark_tui_input_modes_active() -> None:
@@ -998,6 +1000,12 @@ def _run_cleanup(*, notify_session_finalize: bool = True):
         _cleanup_all_browsers()
     except Exception:
         pass
+    # Stop auto-started vagent sidecar
+    if _active_cli_ref and hasattr(_active_cli_ref, '_stop_vagent'):
+        try:
+            _active_cli_ref._stop_vagent()
+        except Exception:
+            pass
     try:
         from tools.mcp_tool import shutdown_mcp_servers
         shutdown_mcp_servers()
@@ -3335,8 +3343,19 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
 
         # vagent gRPC backend config (config.yaml vagent section)
         _vagent_cfg = CLI_CONFIG.get("vagent", {})
-        self._vagent_enabled = bool(_vagent_cfg.get("enabled", False)) if isinstance(_vagent_cfg, dict) else False
-        self._vagent_address = str(_vagent_cfg.get("address", "localhost:50052")) if isinstance(_vagent_cfg, dict) else "localhost:50052"
+        if not isinstance(_vagent_cfg, dict):
+            _vagent_cfg = {}
+        self._vagent_enabled = bool(_vagent_cfg.get("enabled", False))
+        self._vagent_address = str(_vagent_cfg.get("address", "localhost:50052"))
+        self._vagent_auto_start = bool(_vagent_cfg.get("auto_start", False))
+        _binary_raw = str(_vagent_cfg.get("binary", ""))
+        if _binary_raw:
+            self._vagent_binary = os.path.expanduser(_binary_raw)
+        else:
+            # Default: $HERMES_HOME/bin/vagent-grpc-server, or PATH lookup
+            _default = os.path.join(os.path.expanduser(os.environ.get("HERMES_HOME", "~/.hermes")), "bin", "vagent-grpc-server")
+            self._vagent_binary = _default if os.path.isfile(_default) else "vagent-grpc-server"
+        self._vagent_pid = None  # populated when we spawn the server
 
         # Inline diff previews for write actions (display.inline_diffs in config.yaml)
         self._inline_diffs_enabled = CLI_CONFIG["display"].get("inline_diffs", True)

@@ -2789,6 +2789,15 @@ DEFAULT_CONFIG = {
         # to share a single vagent server across multiple hermes-agent
         # instances.
         "address": "localhost:50052",
+        # Auto-start the vagent-grpc-server sidecar process when vagent
+        # is enabled.  When true, hermes-agent spawns the server on
+        # startup and kills it on exit.  When false, you must start the
+        # server manually before enabling vagent.
+        "auto_start": False,
+        # Path to the vagent-grpc-server binary.  Supports ~ expansion.
+        # Default resolves to $HERMES_HOME/bin/vagent-grpc-server if
+        # present, otherwise searches PATH for "vagent-grpc-server".
+        "binary": "",
     },
 
     # Config schema version - bump this when adding new required fields

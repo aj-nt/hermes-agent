@@ -14,6 +14,7 @@ loaded) so this module never imports ``cli`` at import time -> no import cycle.
 
 from __future__ import annotations
 
+import os
 import sys
 
 from rich.markup import escape as _escape
@@ -215,6 +216,133 @@ class CLIAgentSetupMixin:
         route["request_overrides"] = overrides
         return route
 
+    def _ensure_vagent_running(self) -> bool:
+        """Start vagent-grpc-server if auto_start is enabled and it's not already running.
+
+        Checks whether the configured address is accepting TCP connections.
+        If not, spawns the server with the current model/provider settings.
+        Returns True if the server was already running or was successfully started.
+        """
+        if not getattr(self, "_vagent_auto_start", False):
+            return True
+
+        # Determine host and port from address
+        addr = getattr(self, "_vagent_address", "localhost:50052")
+        parts = addr.rsplit(":", 1)
+        if len(parts) != 2:
+            from cli import _cprint
+            _cprint(f"[red]Invalid vagent address: {addr}[/]", file=sys.stderr)
+            return False
+        host, port_str = parts
+        try:
+            port = int(port_str)
+        except ValueError:
+            from cli import _cprint
+            _cprint(f"[red]Invalid vagent port: {port_str}[/]", file=sys.stderr)
+            return False
+
+        # Quick health check — is the server already listening?
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.5)
+        try:
+            s.connect((host, port))
+            s.close()
+            return True  # Already running
+        except (socket.error, OSError, ConnectionRefusedError):
+            pass
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+
+        # Not running — spawn it
+        binary = getattr(self, "_vagent_binary", "vagent-grpc-server")
+        if not os.path.isfile(binary) and "/" not in binary:
+            # PATH lookup failed earlier; try ~/.hermes/bin/ as last resort
+            _hermes_bin = os.path.join(os.path.expanduser("~/.hermes"), "bin", "vagent-grpc-server")
+            if os.path.isfile(_hermes_bin):
+                binary = _hermes_bin
+            else:
+                from cli import _cprint
+                _cprint(f"[red]vagent binary not found: {binary}[/]", file=sys.stderr)
+                return False
+
+        # Build args with the current model configuration
+        model = getattr(self, "model", "") or "glm-5.1:cloud"
+        base_url = getattr(self, "base_url", "") or "http://localhost:11434/v1"
+        api_key = getattr(self, "api_key", "") or "ollama"
+
+        args = [
+            binary,
+            "--real-llm",
+            "--model", model,
+            "--base-url", base_url,
+            "--api-key", api_key,
+        ]
+
+        import subprocess
+        import logging
+        _logger = logging.getLogger(__name__)
+        _logger.info("Starting vagent-grpc-server: %s", " ".join(args))
+
+        try:
+            proc = subprocess.Popen(
+                args,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except FileNotFoundError:
+            from cli import _cprint
+            _cprint(f"[red]vagent binary not found or not executable: {binary}[/]", file=sys.stderr)
+            return False
+        except Exception as e:
+            from cli import _cprint
+            _cprint(f"[red]Failed to start vagent server: {e}[/]", file=sys.stderr)
+            return False
+
+        self._vagent_pid = proc.pid
+        from cli import _cprint
+        _cprint(f"  [dim]vagent-grpc-server started (PID {proc.pid}) on {addr} — model: {model}[/]")
+
+        # Wait briefly for the server to become ready
+        import time
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            s2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s2.settimeout(0.3)
+            try:
+                s2.connect((host, port))
+                s2.close()
+                return True
+            except (socket.error, OSError):
+                time.sleep(0.2)
+            finally:
+                try:
+                    s2.close()
+                except Exception:
+                    pass
+
+        from cli import _cprint
+        _cprint(f"[yellow]vagent server started but not responding on {addr} after 5s[/]", file=sys.stderr)
+        return True  # Best-effort — let the gRPC call fail if it's not ready
+
+    def _stop_vagent(self):
+        """Stop the auto-started vagent-grpc-server process."""
+        pid = getattr(self, "_vagent_pid", None)
+        if pid is None:
+            return
+        import signal
+        try:
+            os.kill(pid, signal.SIGTERM)
+            from cli import _cprint
+            _cprint(f"  [dim]vagent-grpc-server (PID {pid}) stopped[/]")
+        except (OSError, ProcessLookupError):
+            pass
+        self._vagent_pid = None
+
     def _init_agent(self, *, model_override: str = None, runtime_override: dict = None, request_overrides: dict | None = None) -> bool:
         """
         Initialize the agent on first use.
@@ -230,6 +358,9 @@ class CLIAgentSetupMixin:
         _prepare_deferred_agent_startup()
         self._install_tool_callbacks()
         self._ensure_tirith_security()
+
+        # Auto-start vagent sidecar if configured
+        self._ensure_vagent_running()
 
         if not self._ensure_runtime_credentials():
             return False
@@ -404,6 +535,9 @@ class CLIAgentSetupMixin:
             # forever — so memory shutdown never ran on /exit (#49287).
             import cli as _cli
             _cli._active_agent_ref = self.agent
+            # _active_cli_ref lives in cli.py — assign via module to avoid
+            # creating a separate module-local binding in the mixin.
+            _cli._active_cli_ref = self
             # Route agent status output through prompt_toolkit so ANSI escape
             # sequences aren't garbled by patch_stdout's StdoutProxy (#2262).
             self.agent._print_fn = _cprint
