@@ -7361,6 +7361,36 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
         if result.success and result.requires_new_session:
             _cprint("    Tip: `/reset` starts a new session immediately.")
 
+
+    def _handle_vagent(self, cmd_original: str) -> None:
+        """Handle /vagent — toggle the vagent Go backend for the agent loop.
+
+        Usage:
+            /vagent        — show current state
+            /vagent on     — enable vagent backend
+            /vagent off    — disable vagent backend
+        """
+        parts = cmd_original.split(None, 1)
+        raw_args = parts[1].strip() if len(parts) > 1 else ""
+
+        if raw_args == "":
+            state = "on" if getattr(self.agent, "vagent_enabled", False) else "off"
+            _cprint(f"  vagent backend: {state} (Go agent loop via gRPC at localhost:50052)")
+            _cprint(f"  Start server: vagent-grpc-server --real-llm --model glm-5.1:cloud")
+            return
+
+        if raw_args in ("on", "enable", "yes", "true"):
+            self.agent.vagent_enabled = True
+            _cprint("  ✓ vagent backend enabled — next turn will use Go agent loop")
+            _cprint("    Make sure vagent-grpc-server is running on port 50052")
+            _cprint("    Tip: `/reset` starts a new session with the new backend")
+        elif raw_args in ("off", "disable", "no", "false"):
+            self.agent.vagent_enabled = False
+            _cprint("  ✓ vagent backend disabled — next turn will use Python agent loop")
+            _cprint("    Tip: `/reset` starts a new session with the old backend")
+        else:
+            _cprint(f"  ❌ Unknown: {raw_args}")
+            _cprint("    Usage: /vagent [on|off]")
     def _should_handle_model_command_inline(self, text: str, has_images: bool = False) -> bool:
         """Return True when /model should be handled immediately on the UI thread."""
         if not text or has_images or not _looks_like_slash_command(text):
@@ -7688,6 +7718,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
             self._handle_model_switch(cmd_original)
         elif canonical == "codex-runtime":
             self._handle_codex_runtime(cmd_original)
+        elif canonical == "vagent":
+            self._handle_vagent(cmd_original)
         elif canonical == "gquota":
             self._handle_gquota_command(cmd_original)
 

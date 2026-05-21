@@ -251,6 +251,54 @@ def _try_refresh_nous_paid_entitlement_credentials(agent) -> bool:
         return False
 
 
+def _run_vagent_turn(agent, *, user_message, original_user_message, active_system_prompt):
+    """Hand the entire conversation turn to the vagent Go gRPC backend.
+
+    vagent runs the agent loop (LLM calls + streaming), Python handles
+    tool execution via a callback gRPC server.  Returns the same
+    Dict shape as the rest of this function.
+
+    All imports are deferred so the vagent transport is only loaded
+    when actually enabled — avoids gRPC import tax on every session.
+    """
+    from agent.transports.vagent_grpc import run_vagent_turn
+    from model_tools import handle_function_call
+
+    # Build tool schemas from the agent's valid tools
+    tools = []
+    if hasattr(agent, "tools") and agent.tools:
+        tools = agent.tools
+
+    # Use the original user message (clean, no injected prefixes)
+    msg = original_user_message if isinstance(original_user_message, str) else user_message
+
+    # Resolve provider details from the agent's current state
+    provider = getattr(agent, "provider", "") or ""
+    model = getattr(agent, "model", "") or ""
+    api_key = getattr(agent, "api_key", "") or ""
+    base_url = getattr(agent, "base_url", "") or ""
+    session_id = getattr(agent, "session_id", "") or ""
+
+    # Stream callback: hermes-agent's TTS / live-display integration
+    # If the agent has a streaming callback infrastructure, wire it up
+    stream_callback = None
+    if hasattr(agent, "_streaming_hook"):
+        stream_callback = agent._streaming_hook
+
+    return run_vagent_turn(
+        user_message=msg,
+        system_prompt=active_system_prompt or "",
+        provider=provider,
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        tools=tools,
+        max_iterations=getattr(agent, "max_iterations", 90),
+        session_id=session_id,
+        stream_callback=stream_callback,
+        handle_function_call=handle_function_call,
+    )
+
 def _restore_or_build_system_prompt(agent, system_message, conversation_history):
     """Restore the cached system prompt from the session DB or build it fresh.
 
@@ -584,6 +632,18 @@ def run_conversation(
             messages=messages,
             effective_task_id=effective_task_id,
             should_review_memory=_should_review_memory,
+        )
+
+    # Optional opt-in: if vagent backend is enabled, hand the entire turn
+    # to the vagent Go agent loop via gRPC. This bypasses the Python agent
+    # loop entirely — vagent calls the LLM, Python executes tools.
+    # See agent/transports/vagent_grpc.py for the full client.
+    if getattr(agent, "vagent_enabled", False):
+        return _run_vagent_turn(
+            agent,
+            user_message=user_message,
+            original_user_message=original_user_message,
+            active_system_prompt=active_system_prompt,
         )
 
     while (api_call_count < agent.max_iterations and agent.iteration_budget.remaining > 0) or agent._budget_grace_call:
