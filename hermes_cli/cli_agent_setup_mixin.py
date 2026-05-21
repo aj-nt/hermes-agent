@@ -390,6 +390,7 @@ class CLIAgentSetupMixin:
                 tool_gen_callback=self._on_tool_gen_start if self.streaming_enabled else None,
                 notice_callback=self._on_notice,
                 notice_clear_callback=self._on_notice_clear,
+                vagent_enabled=getattr(self, "_vagent_enabled", False),
             )
             # Store reference for atexit memory provider shutdown.
             # NOTE: this MUST write to the ``cli`` module's global, not a

@@ -5313,7 +5313,6 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
         except Exception:
             pass
 
-    
     def _show_security_advisories(self):
         """Show a startup banner if any unacked security advisories match.
 
@@ -7374,18 +7373,22 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
         raw_args = parts[1].strip() if len(parts) > 1 else ""
 
         if raw_args == "":
-            state = "on" if getattr(self.agent, "vagent_enabled", False) else "off"
+            state = "on" if getattr(self, "_vagent_enabled", False) else "off"
             _cprint(f"  vagent backend: {state} (Go agent loop via gRPC at localhost:50052)")
             _cprint(f"  Start server: vagent-grpc-server --real-llm --model glm-5.1:cloud")
             return
 
         if raw_args in ("on", "enable", "yes", "true"):
-            self.agent.vagent_enabled = True
+            self._vagent_enabled = True
+            if self.agent is not None:
+                self.agent.vagent_enabled = True
             _cprint("  ✓ vagent backend enabled — next turn will use Go agent loop")
             _cprint("    Make sure vagent-grpc-server is running on port 50052")
             _cprint("    Tip: `/reset` starts a new session with the new backend")
         elif raw_args in ("off", "disable", "no", "false"):
-            self.agent.vagent_enabled = False
+            self._vagent_enabled = False
+            if self.agent is not None:
+                self.agent.vagent_enabled = False
             _cprint("  ✓ vagent backend disabled — next turn will use Python agent loop")
             _cprint("    Tip: `/reset` starts a new session with the old backend")
         else:

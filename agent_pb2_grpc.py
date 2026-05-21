@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-import agent_pb2 as agent__pb2
+import agent_pb2 as agent_dot_v1_dot_agent__pb2
 
 GRPC_GENERATED_VERSION = '1.80.0'
 GRPC_VERSION = grpc.__version__
@@ -18,7 +18,7 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + ' but the generated code in agent_pb2_grpc.py depends on'
+        + ' but the generated code in agent/v1/agent_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
@@ -37,13 +37,13 @@ class AgentStub(object):
         """
         self.Chat = channel.unary_stream(
                 '/agent.v1.Agent/Chat',
-                request_serializer=agent__pb2.ChatRequest.SerializeToString,
-                response_deserializer=agent__pb2.ChatEvent.FromString,
+                request_serializer=agent_dot_v1_dot_agent__pb2.ChatRequest.SerializeToString,
+                response_deserializer=agent_dot_v1_dot_agent__pb2.ChatEvent.FromString,
                 _registered_method=True)
         self.Ping = channel.unary_unary(
                 '/agent.v1.Agent/Ping',
-                request_serializer=agent__pb2.PingRequest.SerializeToString,
-                response_deserializer=agent__pb2.PingResponse.FromString,
+                request_serializer=agent_dot_v1_dot_agent__pb2.PingRequest.SerializeToString,
+                response_deserializer=agent_dot_v1_dot_agent__pb2.PingResponse.FromString,
                 _registered_method=True)
 
 
@@ -70,13 +70,13 @@ def add_AgentServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'Chat': grpc.unary_stream_rpc_method_handler(
                     servicer.Chat,
-                    request_deserializer=agent__pb2.ChatRequest.FromString,
-                    response_serializer=agent__pb2.ChatEvent.SerializeToString,
+                    request_deserializer=agent_dot_v1_dot_agent__pb2.ChatRequest.FromString,
+                    response_serializer=agent_dot_v1_dot_agent__pb2.ChatEvent.SerializeToString,
             ),
             'Ping': grpc.unary_unary_rpc_method_handler(
                     servicer.Ping,
-                    request_deserializer=agent__pb2.PingRequest.FromString,
-                    response_serializer=agent__pb2.PingResponse.SerializeToString,
+                    request_deserializer=agent_dot_v1_dot_agent__pb2.PingRequest.FromString,
+                    response_serializer=agent_dot_v1_dot_agent__pb2.PingResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -105,8 +105,8 @@ class Agent(object):
             request,
             target,
             '/agent.v1.Agent/Chat',
-            agent__pb2.ChatRequest.SerializeToString,
-            agent__pb2.ChatEvent.FromString,
+            agent_dot_v1_dot_agent__pb2.ChatRequest.SerializeToString,
+            agent_dot_v1_dot_agent__pb2.ChatEvent.FromString,
             options,
             channel_credentials,
             insecure,
@@ -132,8 +132,8 @@ class Agent(object):
             request,
             target,
             '/agent.v1.Agent/Ping',
-            agent__pb2.PingRequest.SerializeToString,
-            agent__pb2.PingResponse.FromString,
+            agent_dot_v1_dot_agent__pb2.PingRequest.SerializeToString,
+            agent_dot_v1_dot_agent__pb2.PingResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -157,8 +157,8 @@ class ToolExecutorStub(object):
         """
         self.Execute = channel.unary_unary(
                 '/agent.v1.ToolExecutor/Execute',
-                request_serializer=agent__pb2.ToolBatch.SerializeToString,
-                response_deserializer=agent__pb2.ToolResults.FromString,
+                request_serializer=agent_dot_v1_dot_agent__pb2.ToolBatch.SerializeToString,
+                response_deserializer=agent_dot_v1_dot_agent__pb2.ToolResults.FromString,
                 _registered_method=True)
 
 
@@ -178,8 +178,8 @@ def add_ToolExecutorServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'Execute': grpc.unary_unary_rpc_method_handler(
                     servicer.Execute,
-                    request_deserializer=agent__pb2.ToolBatch.FromString,
-                    response_serializer=agent__pb2.ToolResults.SerializeToString,
+                    request_deserializer=agent_dot_v1_dot_agent__pb2.ToolBatch.FromString,
+                    response_serializer=agent_dot_v1_dot_agent__pb2.ToolResults.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -208,8 +208,8 @@ class ToolExecutor(object):
             request,
             target,
             '/agent.v1.ToolExecutor/Execute',
-            agent__pb2.ToolBatch.SerializeToString,
-            agent__pb2.ToolResults.FromString,
+            agent_dot_v1_dot_agent__pb2.ToolBatch.SerializeToString,
+            agent_dot_v1_dot_agent__pb2.ToolResults.FromString,
             options,
             channel_credentials,
             insecure,

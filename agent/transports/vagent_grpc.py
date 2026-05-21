@@ -55,6 +55,7 @@ def run_vagent_turn(
     session_id: str = "",
     stream_callback: Optional[Callable[[str], None]] = None,
     handle_function_call: Optional[Callable] = None,
+    conversation_history: Optional[List[Dict[str, Any]]] = None,
     address: str = DEFAULT_ADDRESS,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> Dict[str, Any]:
@@ -74,6 +75,7 @@ def run_vagent_turn(
         handle_function_call: Tool dispatch function (same as model_tools.handle_function_call).
             Signature: (tool_name, arguments, task_id) -> str (JSON output).
             If None, tools are passed to vagent but execution will fail.
+        conversation_history: Prior messages (role/content dicts) to prepend.
         address: vagent gRPC server address (host:port).
         timeout: Max seconds for the entire turn.
 
@@ -95,6 +97,27 @@ def run_vagent_turn(
     # Build the ChatRequest
     proto_tools = [_tool_to_proto(t) for t in (tools or [])]
 
+    # Build proto messages from conversation history
+    proto_msgs = []
+    if conversation_history:
+        for m in conversation_history:
+            role = m.get("role", "")
+            content = m.get("content", "")
+            if isinstance(content, list):
+                # content can be a list of content blocks (vision etc) —
+                # extract text parts only for the proto
+                text_parts = []
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text_parts.append(block.get("text", ""))
+                content = " ".join(text_parts)
+            proto_msgs.append(agent_pb2.Message(
+                role=str(role),
+                content=str(content),
+                tool_call_id=str(m.get("tool_call_id", "")),
+                name=str(m.get("name", "")),
+            ))
+
     request = agent_pb2.ChatRequest(
         session_id=session_id,
         user_message=user_message,
@@ -106,6 +129,7 @@ def run_vagent_turn(
         tools=proto_tools,
         max_iterations=max_iterations,
         tool_executor_address=executor_address,
+        messages=proto_msgs,
     )
 
     # Accumulate state
@@ -159,7 +183,7 @@ def run_vagent_turn(
 
     return {
         "final_response": final_response or all_text,
-        "messages": [
+        "messages": (list(conversation_history) if conversation_history else []) + [
             {"role": "user", "content": user_message},
             {"role": "assistant", "content": final_response or all_text},
         ],
