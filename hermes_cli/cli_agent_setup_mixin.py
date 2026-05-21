@@ -391,6 +391,7 @@ class CLIAgentSetupMixin:
                 notice_callback=self._on_notice,
                 notice_clear_callback=self._on_notice_clear,
                 vagent_enabled=getattr(self, "_vagent_enabled", False),
+                vagent_address=getattr(self, "_vagent_address", "localhost:50052"),
             )
             # Store reference for atexit memory provider shutdown.
             # NOTE: this MUST write to the ``cli`` module's global, not a

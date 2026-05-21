@@ -298,6 +298,7 @@ def _run_vagent_turn(agent, *, user_message, original_user_message, active_syste
         stream_callback=stream_callback,
         handle_function_call=handle_function_call,
         conversation_history=conversation_history,
+        address=getattr(agent, "_vagent_address", "localhost:50052"),
     )
 
 def _restore_or_build_system_prompt(agent, system_message, conversation_history):

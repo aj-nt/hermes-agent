@@ -3333,6 +3333,11 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
         if self.final_response_markdown not in {"render", "strip", "raw"}:
             self.final_response_markdown = "strip"
 
+        # vagent gRPC backend config (config.yaml vagent section)
+        _vagent_cfg = CLI_CONFIG.get("vagent", {})
+        self._vagent_enabled = bool(_vagent_cfg.get("enabled", False)) if isinstance(_vagent_cfg, dict) else False
+        self._vagent_address = str(_vagent_cfg.get("address", "localhost:50052")) if isinstance(_vagent_cfg, dict) else "localhost:50052"
+
         # Inline diff previews for write actions (display.inline_diffs in config.yaml)
         self._inline_diffs_enabled = CLI_CONFIG["display"].get("inline_diffs", True)
 
@@ -7374,16 +7379,32 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
 
         if raw_args == "":
             state = "on" if getattr(self, "_vagent_enabled", False) else "off"
-            _cprint(f"  vagent backend: {state} (Go agent loop via gRPC at localhost:50052)")
+            addr = getattr(self, "_vagent_address", "localhost:50052")
+            _cprint(f"  vagent backend: {state} (Go agent loop via gRPC at {addr})")
+            _cprint(f"  Config: set vagent.enabled and vagent.address in config.yaml")
             _cprint(f"  Start server: vagent-grpc-server --real-llm --model glm-5.1:cloud")
+            return
+
+        # /vagent address <host:port> — update the gRPC target
+        if raw_args.startswith("address "):
+            addr = raw_args[8:].strip()
+            if ":" not in addr:
+                _cprint(f"  Usage: /vagent address <host:port> (e.g. /vagent address 192.168.1.10:50052)")
+                return
+            self._vagent_address = addr
+            if self.agent is not None:
+                self.agent._vagent_address = addr
+            _cprint(f"  ✓ vagent server address set to {addr}")
+            _cprint(f"    Tip: `/reset` starts a new session with this address")
+            _cprint('    To persist, add vagent.address: "' + addr + '" to config.yaml')
             return
 
         if raw_args in ("on", "enable", "yes", "true"):
             self._vagent_enabled = True
             if self.agent is not None:
                 self.agent.vagent_enabled = True
-            _cprint("  ✓ vagent backend enabled — next turn will use Go agent loop")
-            _cprint("    Make sure vagent-grpc-server is running on port 50052")
+            _cprint(f"  ✓ vagent backend enabled — next turn will use Go agent loop")
+            _cprint(f"    Server: {getattr(self, '_vagent_address', 'localhost:50052')}")
             _cprint("    Tip: `/reset` starts a new session with the new backend")
         elif raw_args in ("off", "disable", "no", "false"):
             self._vagent_enabled = False

@@ -2775,6 +2775,21 @@ DEFAULT_CONFIG = {
     "paste_collapse_threshold_fallback": 5,
     "paste_collapse_char_threshold": 2000,
 
+    # vagent gRPC backend — alternative agent loop in Go.  When enabled,
+    # hermes-agent delegates LLM calls + tool orchestration to a sidecar
+    # vagent server while retaining tool execution in Python.
+    "vagent": {
+        # Enable the vagent backend globally (overrides /vagent on|off).
+        # When false, the CLI starts with the Python agent loop; /vagent on
+        # can still toggle it at runtime.  Set true to default to vagent.
+        "enabled": False,
+        # Address of the vagent-grpc-server (host:port).
+        # Default localhost:50052 works when the server runs on the same
+        # machine.  Point to a remote machine (e.g. 192.168.1.100:50052)
+        # to share a single vagent server across multiple hermes-agent
+        # instances.
+        "address": "localhost:50052",
+    },
 
     # Config schema version - bump this when adding new required fields
     "_config_version": 30,
@@ -4393,6 +4408,7 @@ _KNOWN_ROOT_KEYS = {
     "agent", "terminal", "display", "compression", "delegation",
     "auxiliary", "custom_providers", "context", "memory", "gateway",
     "sessions", "streaming", "updates", "mcp_servers",
+    "x_search", "vagent",
 }
 
 # Valid fields inside a custom_providers list entry

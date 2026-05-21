@@ -224,6 +224,7 @@ def init_agent(
     checkpoint_max_file_size_mb: int = 10,
     pass_session_id: bool = False,
     vagent_enabled: bool = False,
+    vagent_address: str = "localhost:50052",
 ):
     """
     Initialize the AI Agent.
@@ -307,6 +308,7 @@ def init_agent(
     agent.load_soul_identity = load_soul_identity
     agent.pass_session_id = pass_session_id
     agent.vagent_enabled = vagent_enabled
+    agent._vagent_address = vagent_address
     agent._credential_pool = credential_pool
     agent.log_prefix_chars = log_prefix_chars
     agent.log_prefix = f"{log_prefix} " if log_prefix else ""
