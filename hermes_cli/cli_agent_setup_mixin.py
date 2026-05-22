@@ -226,6 +226,11 @@ class CLIAgentSetupMixin:
         if not getattr(self, "_vagent_auto_start", False):
             return True
 
+        # Only auto-start when vagent is actually enabled — don't spawn
+        # a server that won't be used (user is on Python backend).
+        if not getattr(self, "_vagent_enabled", False):
+            return True
+
         # Determine host and port from address
         addr = getattr(self, "_vagent_address", "localhost:50052")
         parts = addr.rsplit(":", 1)
