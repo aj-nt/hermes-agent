@@ -642,13 +642,50 @@ def run_conversation(
     # See agent/transports/vagent_grpc.py for the full client.
     if getattr(agent, "vagent_enabled", False):
         agent._safe_print("🐹 [vagent] Go agent loop")
-        return _run_vagent_turn(
+        result = _run_vagent_turn(
             agent,
             user_message=user_message,
             original_user_message=original_user_message,
             active_system_prompt=active_system_prompt,
             conversation_history=list(conversation_history) if conversation_history else None,
         )
+
+        # ── Persist session to SQLite + JSON log ────────────────────
+        # The vagent path returns early, skipping the Python loop's
+        # _persist_session / _save_trajectory / _cleanup calls at the
+        # bottom of run_conversation.  Without these, vagent turns
+        # produce a session row in state.db with zero messages — session
+        # search returns the title but no content.  Wire the same
+        # persistence here.
+        try:
+            vagent_messages = result.get("messages", [])
+            vagent_conv_history = conversation_history
+            agent._persist_session(vagent_messages, vagent_conv_history)
+        except Exception as _persist_err:
+            logger.error(
+                "%svagent persist failed: %s", agent.log_prefix, _persist_err, exc_info=True
+            )
+
+        # ── Save trajectory ──────────────────────────────────────────
+        try:
+            vagent_completed = result.get("exit_reason", "") != "error"
+            agent._save_trajectory(
+                result.get("messages", []),
+                _summarize_user_message_for_log(user_message),
+                vagent_completed,
+            )
+        except Exception as _traj_err:
+            logger.error(
+                "%svagent trajectory save failed: %s", agent.log_prefix, _traj_err, exc_info=True
+            )
+
+        # ── Cleanup task resources ──────────────────────────────────
+        try:
+            agent._cleanup_task_resources(effective_task_id)
+        except Exception:
+            pass  # Best-effort, matches the Python loop's pattern
+
+        return result
 
     while (api_call_count < agent.max_iterations and agent.iteration_budget.remaining > 0) or agent._budget_grace_call:
         # Reset per-turn checkpoint dedup so each iteration can take one snapshot

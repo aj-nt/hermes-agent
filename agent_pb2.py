@@ -24,11 +24,11 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x14\x61gent/v1/agent.proto\x12\x08\x61gent.v1\"\x97\x02\n\x0b\x43hatRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x14\n\x0cuser_message\x18\x02 \x01(\t\x12\x15\n\rsystem_prompt\x18\x03 \x01(\t\x12#\n\x08messages\x18\x0b \x03(\x0b\x32\x11.agent.v1.Message\x12\x10\n\x08provider\x18\x04 \x01(\t\x12\r\n\x05model\x18\x05 \x01(\t\x12\x0f\n\x07\x61pi_key\x18\x06 \x01(\t\x12\x10\n\x08\x62\x61se_url\x18\x07 \x01(\t\x12\'\n\x05tools\x18\x08 \x03(\x0b\x32\x18.agent.v1.ToolDefinition\x12\x16\n\x0emax_iterations\x18\t \x01(\x05\x12\x1d\n\x15tool_executor_address\x18\n \x01(\t\"L\n\x07Message\x12\x0c\n\x04role\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\x12\x14\n\x0ctool_call_id\x18\x03 \x01(\t\x12\x0c\n\x04name\x18\x04 \x01(\t\"L\n\x0eToolDefinition\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x02 \x01(\t\x12\x17\n\x0fparameters_json\x18\x03 \x01(\t\"\xa1\x01\n\tChatEvent\x12\x14\n\ntext_delta\x18\x01 \x01(\tH\x00\x12)\n\ntool_batch\x18\x02 \x01(\x0b\x32\x13.agent.v1.ToolBatchH\x00\x12#\n\x04\x64one\x18\x03 \x01(\x0b\x32\x13.agent.v1.DoneEventH\x00\x12%\n\x05\x65rror\x18\x04 \x01(\x0b\x32\x14.agent.v1.ErrorEventH\x00\x42\x07\n\x05\x65vent\"L\n\tDoneEvent\x12\x16\n\x0e\x66inal_response\x18\x01 \x01(\t\x12\x13\n\x0b\x65xit_reason\x18\x02 \x01(\t\x12\x12\n\niterations\x18\x03 \x01(\x05\"+\n\nErrorEvent\x12\x0c\n\x04\x63ode\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x02 \x01(\t\".\n\tToolBatch\x12!\n\x05\x63\x61lls\x18\x01 \x03(\x0b\x32\x12.agent.v1.ToolCall\"A\n\x08ToolCall\x12\x0f\n\x07\x63\x61ll_id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x16\n\x0e\x61rguments_json\x18\x03 \x01(\t\"4\n\x0bToolResults\x12%\n\x07results\x18\x01 \x03(\x0b\x32\x14.agent.v1.ToolResult\"D\n\nToolResult\x12\x0f\n\x07\x63\x61ll_id\x18\x01 \x01(\t\x12\x13\n\x0boutput_json\x18\x02 \x01(\t\x12\x10\n\x08is_error\x18\x03 \x01(\x08\"\x1e\n\x0bPingRequest\x12\x0f\n\x07message\x18\x01 \x01(\t\"5\n\x0cPingResponse\x12\r\n\x05reply\x18\x01 \x01(\t\x12\x16\n\x0eserver_time_ns\x18\x02 \x01(\x03\x32t\n\x05\x41gent\x12\x34\n\x04\x43hat\x12\x15.agent.v1.ChatRequest\x1a\x13.agent.v1.ChatEvent0\x01\x12\x35\n\x04Ping\x12\x15.agent.v1.PingRequest\x1a\x16.agent.v1.PingResponse2E\n\x0cToolExecutor\x12\x35\n\x07\x45xecute\x12\x13.agent.v1.ToolBatch\x1a\x15.agent.v1.ToolResultsB0Z.github.com/aj-nt/vagent/proto/agent/v1;agentv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x14\x61gent/v1/agent.proto\x12\x08\x61gent.v1\"\x97\x02\n\x0b\x43hatRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x14\n\x0cuser_message\x18\x02 \x01(\t\x12\x15\n\rsystem_prompt\x18\x03 \x01(\t\x12#\n\x08messages\x18\x0b \x03(\x0b\x32\x11.agent.v1.Message\x12\x10\n\x08provider\x18\x04 \x01(\t\x12\r\n\x05model\x18\x05 \x01(\t\x12\x0f\n\x07\x61pi_key\x18\x06 \x01(\t\x12\x10\n\x08\x62\x61se_url\x18\x07 \x01(\t\x12\'\n\x05tools\x18\x08 \x03(\x0b\x32\x18.agent.v1.ToolDefinition\x12\x16\n\x0emax_iterations\x18\t \x01(\x05\x12\x1d\n\x15tool_executor_address\x18\n \x01(\t\"L\n\x07Message\x12\x0c\n\x04role\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\x12\x14\n\x0ctool_call_id\x18\x03 \x01(\t\x12\x0c\n\x04name\x18\x04 \x01(\t\"L\n\x0eToolDefinition\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x02 \x01(\t\x12\x17\n\x0fparameters_json\x18\x03 \x01(\t\"\xbb\x01\n\tChatEvent\x12\x14\n\ntext_delta\x18\x01 \x01(\tH\x00\x12)\n\ntool_batch\x18\x02 \x01(\x0b\x32\x13.agent.v1.ToolBatchH\x00\x12#\n\x04\x64one\x18\x03 \x01(\x0b\x32\x13.agent.v1.DoneEventH\x00\x12%\n\x05\x65rror\x18\x04 \x01(\x0b\x32\x14.agent.v1.ErrorEventH\x00\x12\x18\n\x0ethinking_delta\x18\x05 \x01(\tH\x00\x42\x07\n\x05\x65vent\"L\n\tDoneEvent\x12\x16\n\x0e\x66inal_response\x18\x01 \x01(\t\x12\x13\n\x0b\x65xit_reason\x18\x02 \x01(\t\x12\x12\n\niterations\x18\x03 \x01(\x05\"+\n\nErrorEvent\x12\x0c\n\x04\x63ode\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x02 \x01(\t\".\n\tToolBatch\x12!\n\x05\x63\x61lls\x18\x01 \x03(\x0b\x32\x12.agent.v1.ToolCall\"A\n\x08ToolCall\x12\x0f\n\x07\x63\x61ll_id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x16\n\x0e\x61rguments_json\x18\x03 \x01(\t\"4\n\x0bToolResults\x12%\n\x07results\x18\x01 \x03(\x0b\x32\x14.agent.v1.ToolResult\"D\n\nToolResult\x12\x0f\n\x07\x63\x61ll_id\x18\x01 \x01(\t\x12\x13\n\x0boutput_json\x18\x02 \x01(\t\x12\x10\n\x08is_error\x18\x03 \x01(\x08\"\x1e\n\x0bPingRequest\x12\x0f\n\x07message\x18\x01 \x01(\t\"5\n\x0cPingResponse\x12\r\n\x05reply\x18\x01 \x01(\t\x12\x16\n\x0eserver_time_ns\x18\x02 \x01(\x03\x32t\n\x05\x41gent\x12\x34\n\x04\x43hat\x12\x15.agent.v1.ChatRequest\x1a\x13.agent.v1.ChatEvent0\x01\x12\x35\n\x04Ping\x12\x15.agent.v1.PingRequest\x1a\x16.agent.v1.PingResponse2E\n\x0cToolExecutor\x12\x35\n\x07\x45xecute\x12\x13.agent.v1.ToolBatch\x1a\x15.agent.v1.ToolResultsB0Z.github.com/aj-nt/vagent/proto/agent/v1;agentv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
-_builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'agent.v1.agent_pb2', _globals)
+_builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'agent_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'Z.github.com/aj-nt/vagent/proto/agent/v1;agentv1'
@@ -39,25 +39,25 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_TOOLDEFINITION']._serialized_start=394
   _globals['_TOOLDEFINITION']._serialized_end=470
   _globals['_CHATEVENT']._serialized_start=473
-  _globals['_CHATEVENT']._serialized_end=634
-  _globals['_DONEEVENT']._serialized_start=636
-  _globals['_DONEEVENT']._serialized_end=712
-  _globals['_ERROREVENT']._serialized_start=714
-  _globals['_ERROREVENT']._serialized_end=757
-  _globals['_TOOLBATCH']._serialized_start=759
-  _globals['_TOOLBATCH']._serialized_end=805
-  _globals['_TOOLCALL']._serialized_start=807
-  _globals['_TOOLCALL']._serialized_end=872
-  _globals['_TOOLRESULTS']._serialized_start=874
-  _globals['_TOOLRESULTS']._serialized_end=926
-  _globals['_TOOLRESULT']._serialized_start=928
-  _globals['_TOOLRESULT']._serialized_end=996
-  _globals['_PINGREQUEST']._serialized_start=998
-  _globals['_PINGREQUEST']._serialized_end=1028
-  _globals['_PINGRESPONSE']._serialized_start=1030
-  _globals['_PINGRESPONSE']._serialized_end=1083
-  _globals['_AGENT']._serialized_start=1085
-  _globals['_AGENT']._serialized_end=1201
-  _globals['_TOOLEXECUTOR']._serialized_start=1203
-  _globals['_TOOLEXECUTOR']._serialized_end=1272
+  _globals['_CHATEVENT']._serialized_end=660
+  _globals['_DONEEVENT']._serialized_start=662
+  _globals['_DONEEVENT']._serialized_end=738
+  _globals['_ERROREVENT']._serialized_start=740
+  _globals['_ERROREVENT']._serialized_end=783
+  _globals['_TOOLBATCH']._serialized_start=785
+  _globals['_TOOLBATCH']._serialized_end=831
+  _globals['_TOOLCALL']._serialized_start=833
+  _globals['_TOOLCALL']._serialized_end=898
+  _globals['_TOOLRESULTS']._serialized_start=900
+  _globals['_TOOLRESULTS']._serialized_end=952
+  _globals['_TOOLRESULT']._serialized_start=954
+  _globals['_TOOLRESULT']._serialized_end=1022
+  _globals['_PINGREQUEST']._serialized_start=1024
+  _globals['_PINGREQUEST']._serialized_end=1054
+  _globals['_PINGRESPONSE']._serialized_start=1056
+  _globals['_PINGRESPONSE']._serialized_end=1109
+  _globals['_AGENT']._serialized_start=1111
+  _globals['_AGENT']._serialized_end=1227
+  _globals['_TOOLEXECUTOR']._serialized_start=1229
+  _globals['_TOOLEXECUTOR']._serialized_end=1298
 # @@protoc_insertion_point(module_scope)

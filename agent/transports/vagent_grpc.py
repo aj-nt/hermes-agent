@@ -2,17 +2,24 @@
 
 Architecture:
   hermes (Python)                     vagent (Go)
-      │                                   │
-      │── 1. Start ToolExecutor server ───┤
-      │── 2. Chat(msg, tools, addr) ─────>│  agent loop starts
-      │                                   │  calls LLM
-      │<── 3. stream: text_delta ─────────┤
-      │                                   │  LLM returns tool calls
-      │<── 4. stream: tool_batch ─────────┤  (observability)
-      │<── 5. ToolExecutor.Execute() ─────┤  calls back for execution
-      │── 6. return results ─────────────>│  continues loop
-      │<── 7. stream: text_delta ─────────┤
-      │<── 8. stream: done ───────────────┤  final response
+      |                                   |
+      |-- 1. Start ToolExecutor server ---|
+      |-- 2. Chat(msg, tools, addr) ---->|  agent loop starts
+      |                                   |  calls LLM
+      |<-- 3. stream: text_delta ---------|  (observability)
+      |<-- 4. stream: tool_batch ---------|  (observability)
+      |<-- 5. ToolExecutor.Execute() -----|  calls back for execution
+      |                                   |    executor records call + result
+      |-- 6. return results ------------>|  continues loop
+      |<-- 7. stream: text_delta ---------|
+      |<-- 8. stream: done --------------|  final response
+
+Intermediate message capture:
+  The ToolExecutor records every tool call and result as OpenAI-format
+  message dicts in a thread-safe accumulator.  After the gRPC stream
+  completes, run_vagent_turn drains the accumulator to build a full
+  conversation history — including all assistant tool_calls and tool
+  result messages — for session persistence in state.db.
 """
 
 from __future__ import annotations
@@ -30,6 +37,8 @@ import agent_pb2_grpc
 from agent.transports.vagent_tool_executor import (
     start_tool_executor_server,
     set_tool_dispatcher,
+    drain_intermediate_messages,
+    reset_intermediate_messages,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,8 +89,10 @@ def run_vagent_turn(
         timeout: Max seconds for the entire turn.
 
     Returns:
-        Dict with keys: final_response, messages, iterations, exit_reason.
-        Same shape as conversation_loop.run_conversation().
+        Dict with keys: final_response, messages, iterations, exit_reason,
+        completed, failed, api_calls.  The messages list includes all
+        intermediate tool-call and tool-result messages, not just the
+        user request and final assistant response.
     """
     # Start the tool executor server that vagent will call back to
     executor_port = start_tool_executor_server(0)  # 0 = OS picks port
@@ -90,6 +101,9 @@ def run_vagent_turn(
     # Set up the tool dispatcher
     if handle_function_call is not None:
         set_tool_dispatcher(handle_function_call)
+
+    # Reset the intermediate message accumulator for this turn
+    reset_intermediate_messages()
 
     channel = grpc.insecure_channel(address)
     stub = agent_pb2_grpc.AgentStub(channel)
@@ -152,6 +166,10 @@ def run_vagent_turn(
                 if stream_callback:
                     stream_callback(delta)
 
+            elif which == "thinking_delta":
+                # Reasoning/CoT chunks — currently not persisted
+                pass
+
             elif which == "tool_batch":
                 batch = event.tool_batch
                 logger.info(
@@ -159,8 +177,10 @@ def run_vagent_turn(
                     len(batch.calls),
                     [c.name for c in batch.calls],
                 )
-                # Results are handled by the ToolExecutor server callback —
-                # vagent calls it directly. This event is for observability.
+                # The tool_batch stream event is for observability only.
+                # Intermediate messages (assistant tool_calls + tool results)
+                # are recorded by the ToolExecutor during Execute() and
+                # drained after the stream completes (see drain below).
 
             elif which == "done":
                 final_response = event.done.final_response
@@ -173,6 +193,12 @@ def run_vagent_turn(
                     f"vagent error: {event.error.code} — {event.error.message}"
                 )
 
+        # After the stream completes, drain all intermediate messages that
+        # the ToolExecutor accumulated during the turn.  This gives us the
+        # full chain: assistant (tool_calls) → tool (result) for each batch,
+        # in correct execution order.
+        intermediate_messages = drain_intermediate_messages()
+
     except grpc.RpcError as e:
         code = e.code()
         details = e.details()
@@ -181,18 +207,29 @@ def run_vagent_turn(
     finally:
         channel.close()
 
+    # Derive completed/failed from exit_reason for contract parity with
+    # the Python agent loop's return shape (callers check these keys).
+    completed = exit_reason == "completed"
+    failed = exit_reason in ("error", "unknown")
+
+    # Build the full messages list: conversation_history + user + intermediates + final assistant
+    messages = list(conversation_history) if conversation_history else []
+    messages.append({"role": "user", "content": user_message})
+    messages.extend(intermediate_messages)
+    messages.append({"role": "assistant", "content": final_response or all_text})
+
     return {
         "final_response": final_response or all_text,
-        "messages": (list(conversation_history) if conversation_history else []) + [
-            {"role": "user", "content": user_message},
-            {"role": "assistant", "content": final_response or all_text},
-        ],
+        "messages": messages,
         "iterations": iterations,
         "exit_reason": exit_reason,
+        "completed": completed,
+        "failed": failed,
+        "api_calls": iterations,  # vagent iterations ≈ API calls
     }
 
 
-# ── Helpers ───────────────────────────────────────────────────────
+# ── Private helpers ───────────────────────────────────────────────
 
 def _tool_to_proto(tool: Dict[str, Any]) -> agent_pb2.ToolDefinition:
     """Convert an OpenAI-format tool schema to the proto ToolDefinition."""
