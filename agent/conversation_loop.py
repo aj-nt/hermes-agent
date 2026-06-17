@@ -279,11 +279,24 @@ def _run_vagent_turn(agent, *, user_message, original_user_message, active_syste
     base_url = getattr(agent, "base_url", "") or ""
     session_id = getattr(agent, "session_id", "") or ""
 
-    # Stream callback: hermes-agent's TTS / live-display integration
-    # If the agent has a streaming callback infrastructure, wire it up
-    stream_callback = None
-    if hasattr(agent, "_streaming_hook"):
-        stream_callback = agent._streaming_hook
+    # Stream callback: hermes-agent's TTS / live-display integration.
+    # _stream_callback is set by run_conversation() before the vagent
+    # dispatch (line 314: agent._stream_callback = stream_callback).
+    # When the CLI provides stream_delta_callback, the standard agent
+    # loop streams through _interruptible_api_call → _stream_callback
+    # → stream_delta_callback. The vagent path must wire the same
+    # callback so the CLI receives text deltas as they arrive.
+    _tts = getattr(agent, "_stream_callback", None)
+    _display = getattr(agent, "stream_delta_callback", None)
+
+    def _vagent_stream_callback(delta: str) -> None:
+        """Fan out text/thinking deltas to both TTS and CLI display."""
+        if _tts:
+            _tts(delta)
+        if _display:
+            _display(delta)
+
+    stream_callback = _vagent_stream_callback if (_tts or _display) else None
 
     return run_vagent_turn(
         user_message=msg,

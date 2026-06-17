@@ -246,21 +246,13 @@ class CLIAgentSetupMixin:
             _cprint(f"[red]Invalid vagent port: {port_str}[/]", file=sys.stderr)
             return False
 
-        # Quick health check — is the server already listening?
-        import socket
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.5)
-        try:
-            s.connect((host, port))
-            s.close()
+        # Quick health check — is the server already running?
+        # Use a gRPC Ping, not a raw TCP connect.  The kernel can accept
+        # a TCP SYN before the Go gRPC server has finished initialising,
+        # so a TCP-level probe gives a false-positive when vagent is still
+        # coming up.  A gRPC Ping confirms the server is actually serving.
+        if self._ping_vagent_grpc(host, port, deadline=2.0):
             return True  # Already running
-        except (socket.error, OSError, ConnectionRefusedError):
-            pass
-        finally:
-            try:
-                s.close()
-            except Exception:
-                pass
 
         # Not running — spawn it
         binary = getattr(self, "_vagent_binary", "vagent-grpc-server")
@@ -312,27 +304,19 @@ class CLIAgentSetupMixin:
         from cli import _cprint
         _cprint(f"  [dim]vagent-grpc-server started (PID {proc.pid}) on {addr} — model: {model}[/]")
 
-        # Wait briefly for the server to become ready
+        # Wait briefly for the gRPC server to become ready.
+        # Use gRPC Ping (not TCP connect) — TCP can be accepted before the
+        # Go gRPC server has finished initialising, giving a false-positive.
         import time
         deadline = time.time() + 5.0
         while time.time() < deadline:
-            s2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s2.settimeout(0.3)
-            try:
-                s2.connect((host, port))
-                s2.close()
+            if self._ping_vagent_grpc(host, port, deadline=1.0):
                 return True
-            except (socket.error, OSError):
-                time.sleep(0.2)
-            finally:
-                try:
-                    s2.close()
-                except Exception:
-                    pass
+            time.sleep(0.3)
 
         from cli import _cprint
-        _cprint(f"[yellow]vagent server started but not responding on {addr} after 5s[/]", file=sys.stderr)
-        return True  # Best-effort — let the gRPC call fail if it's not ready
+        _cprint(f"[yellow]vagent server started but not responding on {addr} after 5s — disabling vagent for this session[/]", file=sys.stderr)
+        return False  # vagent is not ready — fall back to Python agent loop
 
     def _stop_vagent(self):
         """Stop the auto-started vagent-grpc-server process."""
@@ -347,6 +331,41 @@ class CLIAgentSetupMixin:
         except (OSError, ProcessLookupError):
             pass
         self._vagent_pid = None
+
+    @staticmethod
+    def _ping_vagent_grpc(host: str, port: int, deadline: float = 2.0) -> bool:
+        """Ping vagent via gRPC to verify it is actually serving.
+
+        A raw TCP connect can succeed before the Go gRPC server has finished
+        initialising (kernel accepts SYN, but gRPC isn't listening yet).  A
+        gRPC Ping confirms the server is fully up.
+
+        All imports are deferred so the gRPC modules aren't loaded on every
+        CLI session — they're only pulled in when vagent is enabled.
+        """
+        try:
+            import grpc
+            import agent_pb2
+            import agent_pb2_grpc
+        except ImportError:
+            return False
+
+        addr = f"{host}:{port}"
+        try:
+            channel = grpc.insecure_channel(addr)
+            stub = agent_pb2_grpc.AgentStub(channel)
+            resp = stub.Ping(
+                agent_pb2.PingRequest(message="startup-probe"),
+                timeout=deadline,
+            )
+            return resp.reply.startswith("pong:")
+        except Exception:
+            return False
+        finally:
+            try:
+                channel.close()
+            except Exception:
+                pass
 
     def _init_agent(self, *, model_override: str = None, runtime_override: dict = None, request_overrides: dict | None = None) -> bool:
         """
@@ -365,7 +384,12 @@ class CLIAgentSetupMixin:
         self._ensure_tirith_security()
 
         # Auto-start vagent sidecar if configured
-        self._ensure_vagent_running()
+        if not self._ensure_vagent_running():
+            from cli import _cprint
+            _cprint("[yellow]  Switching to Python agent loop for this session[/]", file=sys.stderr)
+            self._vagent_enabled = False
+            if self.agent is not None:
+                self.agent.vagent_enabled = False
 
         if not self._ensure_runtime_credentials():
             return False
