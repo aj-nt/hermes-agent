@@ -333,6 +333,7 @@ def _preserve_unicode_in_replacement(
     by diffing old_string→new_string and applying only the actual edits
     to the file's original text, preserving Unicode for unchanged portions.
     """
+    import difflib
     # Aggregate the matched file regions
     file_region = "".join(content[start:end] for start, end in matches)
 
@@ -348,17 +349,27 @@ def _preserve_unicode_in_replacement(
     # Build position maps from normalized space back to original space
     # for both old_string and file_region.  UNICODE_MAP replacements can
     # expand characters (em-dash → '--'), so normalized positions don't
-    # map 1:1 to original positions.  Reuse the module-level
-    # _build_orig_to_norm_map, then invert it (same inversion as
-    # _map_positions_norm_to_orig) to get norm→orig lookups.
-    file_orig_to_norm = _build_orig_to_norm_map(file_region)
-    file_norm_to_orig: dict[int, int] = {}
-    for orig_pos, np in enumerate(file_orig_to_norm[:-1]):
-        if np not in file_norm_to_orig:
-            file_norm_to_orig[np] = orig_pos
+    # map 1:1 to original positions.
+    def _build_norm_to_orig_map(original: str):
+        orig_to_norm: List[int] = []
+        norm_pos = 0
+        for char in original:
+            orig_to_norm.append(norm_pos)
+            repl = UNICODE_MAP.get(char)
+            norm_pos += len(repl) if repl is not None else 1
+        orig_to_norm.append(norm_pos)  # sentinel
+        # Invert: norm_pos → first original position
+        norm_to_orig: dict[int, int] = {}
+        for orig_pos, np in enumerate(orig_to_norm[:-1]):
+            if np not in norm_to_orig:
+                norm_to_orig[np] = orig_pos
+        return norm_to_orig, orig_to_norm
+
+    old_norm_to_orig, old_orig_to_norm = _build_norm_to_orig_map(old_string)
+    file_norm_to_orig, file_orig_to_norm = _build_norm_to_orig_map(file_region)
 
     # Diff norm_old → new_string to find the actual edits
-    sm = SequenceMatcher(None, norm_old, new_string)
+    sm = difflib.SequenceMatcher(None, norm_old, new_string)
     opcodes = sm.get_opcodes()
 
     # Apply edits to file_region, preserving Unicode for unchanged spans
